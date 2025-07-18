@@ -29,7 +29,9 @@ function getEnvValue(key: string, defaultValue: string): string {
   return value !== undefined ? value : defaultValue;
 }
 
-async function maybeReadFileAsBuffer(path?: string): Promise<Buffer | undefined> {
+async function maybeReadFileAsBuffer(
+  path?: string
+): Promise<Buffer | undefined> {
   if (path === undefined) return undefined;
   return await fs.readFile(path);
 }
