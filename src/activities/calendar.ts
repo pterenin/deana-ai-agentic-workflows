@@ -1,5 +1,4 @@
 import { google } from 'googleapis';
-// import { log } from '@temporalio/activity';
 import 'dotenv/config';
 
 function makeOauthClient(creds: {
@@ -51,6 +50,7 @@ export async function getEvents(
     });
     const result = res.data.items || [];
     console.log('🎯 [getEvents] Returning ' + result.length + ' events');
+    console.log('🎯 [getEvents] Returning events:', result);
     return result;
   } catch (err) {
     console.error('❌ [getEvents] Error occurred:', {
@@ -78,19 +78,58 @@ export async function getEvents(
 export async function createEvent(
   creds: any,
   calendarId: string,
-  event: { start: string; end: string; summary: string; attendees?: string[] }
+  event: {
+    start: string;
+    end: string;
+    summary: string;
+    attendees?: any[]; // Accept both string[] and {email}[]
+    timeZone?: string;
+  }
 ): Promise<any> {
   const auth = makeOauthClient(creds);
   const cal = google.calendar({ version: 'v3', auth });
   const eventWithAttendees = {
     ...event,
     attendees: event.attendees
-      ? event.attendees.map((email) => ({ email }))
+      ? event.attendees.map((a) => (typeof a === 'string' ? { email: a } : a))
       : undefined,
-    start: { dateTime: event.start },
-    end: { dateTime: event.end },
+    start: event.timeZone
+      ? { dateTime: event.start, timeZone: event.timeZone }
+      : { dateTime: event.start },
+    end: event.timeZone
+      ? { dateTime: event.end, timeZone: event.timeZone }
+      : { dateTime: event.end },
   };
-  return cal.events.insert({ calendarId, requestBody: eventWithAttendees });
+  try {
+    console.log(
+      '[createEvent] Creating event with:',
+      JSON.stringify(eventWithAttendees, null, 2)
+    );
+    const response = await cal.events.insert({
+      calendarId,
+      requestBody: eventWithAttendees,
+    });
+    console.log(
+      '[createEvent] Google Calendar API response:',
+      JSON.stringify(response.data, null, 2)
+    );
+    return response.data;
+  } catch (error: any) {
+    console.error('[createEvent] Error creating event:', {
+      message: error.message,
+      code: error.code,
+      status: error.status,
+      response: error.response?.data,
+      stack: error.stack,
+    });
+    return {
+      error: true,
+      message: error.message,
+      code: error.code,
+      status: error.status,
+      response: error.response?.data,
+    };
+  }
 }
 
 export async function updateEvent(
@@ -131,10 +170,50 @@ export async function deleteEvent(
   calendarId: string,
   eventId: string
 ) {
+  // Validate eventId
+  if (!eventId || eventId === 'test' || eventId.length < 3) {
+    throw new Error(
+      `Invalid event ID: "${eventId}". Event ID must be a valid Google Calendar event ID.`
+    );
+  }
+
   const auth = makeOauthClient(creds);
   const cal = google.calendar({ version: 'v3', auth });
-  return cal.events.delete({
-    calendarId,
-    eventId,
-  });
+
+  try {
+    console.log(
+      `🗑️ [deleteEvent] Attempting to delete event: ${eventId} from calendar: ${calendarId}`
+    );
+
+    const result = await cal.events.delete({
+      calendarId,
+      eventId,
+    });
+
+    console.log(`✅ [deleteEvent] Successfully deleted event: ${eventId}`);
+    return {
+      success: true,
+      message: `Event "${eventId}" has been deleted successfully.`,
+      data: result,
+    };
+  } catch (error: any) {
+    console.error(`❌ [deleteEvent] Error deleting event ${eventId}:`, {
+      error: error.message,
+      code: error.code,
+      status: error.status,
+      response: error.response?.data,
+    });
+
+    if (error.code === 404) {
+      throw new Error(
+        `Event "${eventId}" not found. It may have already been deleted or the event ID is incorrect.`
+      );
+    } else if (error.code === 403) {
+      throw new Error(
+        `Permission denied. You don't have permission to delete this event.`
+      );
+    } else {
+      throw new Error(`Failed to delete event "${eventId}": ${error.message}`);
+    }
+  }
 }
