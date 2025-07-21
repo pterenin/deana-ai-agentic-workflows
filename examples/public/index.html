@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deana AI - Calendar Assistant</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+          sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .chat-container {
+        width: 100%;
+        max-width: 900px;
+        height: 80vh;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .chat-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 25px;
+        text-align: center;
+        position: relative;
+      }
+
+      .chat-header h1 {
+        font-size: 28px;
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+
+      .chat-header p {
+        opacity: 0.9;
+        font-size: 16px;
+      }
+
+      .status-indicator {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #4caf50;
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+
+      .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+        background: #f8f9fa;
+      }
+
+      .welcome-message {
+        text-align: center;
+        padding: 40px 20px;
+        color: #6c757d;
+        max-width: 500px;
+        margin: 0 auto;
+      }
+
+      .welcome-message h2 {
+        color: #495057;
+        margin-bottom: 20px;
+        font-size: 24px;
+      }
+
+      .welcome-message .features {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-top: 25px;
+      }
+
+      .feature-card {
+        background: white;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #e9ecef;
+        text-align: left;
+      }
+
+      .feature-card h3 {
+        color: #495057;
+        margin-bottom: 8px;
+        font-size: 16px;
+      }
+
+      .feature-card p {
+        color: #6c757d;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      .message {
+        margin-bottom: 20px;
+        max-width: 85%;
+        animation: fadeIn 0.3s ease-in;
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .message.user {
+        margin-left: auto;
+      }
+
+      .message.assistant {
+        margin-right: auto;
+      }
+
+      .message-content {
+        padding: 15px 20px;
+        border-radius: 20px;
+        position: relative;
+        line-height: 1.5;
+      }
+
+      .message.user .message-content {
+        background: #007bff;
+        color: white;
+        border-bottom-right-radius: 5px;
+      }
+
+      .message.assistant .message-content {
+        background: white;
+        border: 1px solid #e9ecef;
+        color: #495057;
+        border-bottom-left-radius: 5px;
+      }
+
+      .message.error .message-content {
+        background: #f8d7da;
+        border-color: #f5c6cb;
+        color: #721c24;
+      }
+
+      .message-timestamp {
+        font-size: 12px;
+        color: #6c757d;
+        margin-top: 5px;
+        text-align: right;
+      }
+
+      .alternatives {
+        margin-top: 15px;
+        padding-top: 15px;
+        border-top: 1px solid #e9ecef;
+      }
+
+      .alternatives h4 {
+        margin: 0 0 12px 0;
+        color: #495057;
+        font-size: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .alternatives-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+      }
+
+      .alternative-option {
+        padding: 12px 16px;
+        background: #e3f2fd;
+        border: 2px solid #bbdefb;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.2s;
+        text-align: center;
+      }
+
+      .alternative-option:hover {
+        background: #bbdefb;
+        border-color: #90caf9;
+        transform: translateY(-2px);
+      }
+
+      .progress-container {
+        padding: 20px;
+        background: #f8f9fa;
+        border-top: 1px solid #e9ecef;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+      }
+
+      .progress-bar {
+        flex: 1;
+        height: 8px;
+        background: #e9ecef;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        transition: width 0.3s ease;
+        border-radius: 4px;
+      }
+
+      .progress-text {
+        font-size: 14px;
+        color: #495057;
+        white-space: nowrap;
+        font-weight: 500;
+      }
+
+      .cancel-button {
+        padding: 8px 16px;
+        background: #dc3545;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: background 0.2s;
+      }
+
+      .cancel-button:hover {
+        background: #c82333;
+      }
+
+      .chat-input {
+        padding: 25px;
+        border-top: 1px solid #e9ecef;
+        display: flex;
+        gap: 15px;
+        background: white;
+        align-items: center;
+      }
+
+      .chat-input input {
+        flex: 1;
+        padding: 15px 20px;
+        border: 2px solid #e9ecef;
+        border-radius: 25px;
+        font-size: 16px;
+        transition: all 0.2s;
+        outline: none;
+      }
+
+      .chat-input input:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+      }
+
+      .chat-input input:disabled {
+        background: #f8f9fa;
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      .send-button {
+        width: 55px;
+        height: 55px;
+        border-radius: 50%;
+        border: none;
+        background: #667eea;
+        color: white;
+        cursor: pointer;
+        font-size: 20px;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .send-button:hover:not(:disabled) {
+        background: #5a6fd8;
+        transform: scale(1.05);
+      }
+
+      .send-button:disabled {
+        background: #6c757d;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .typing-indicator {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 15px 20px;
+        background: white;
+        border: 1px solid #e9ecef;
+        border-radius: 20px;
+        margin-bottom: 20px;
+        margin-right: auto;
+        max-width: 85%;
+        border-bottom-left-radius: 5px;
+      }
+
+      .typing-dots {
+        display: flex;
+        gap: 3px;
+      }
+
+      .typing-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #6c757d;
+        animation: typing 1.4s infinite ease-in-out;
+      }
+
+      .typing-dot:nth-child(1) {
+        animation-delay: -0.32s;
+      }
+      .typing-dot:nth-child(2) {
+        animation-delay: -0.16s;
+      }
+
+      @keyframes typing {
+        0%,
+        80%,
+        100% {
+          transform: scale(0.8);
+          opacity: 0.5;
+        }
+        40% {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+
+      @media (max-width: 768px) {
+        .chat-container {
+          height: 100vh;
+          border-radius: 0;
+        }
+
+        .chat-header {
+          padding: 20px;
+        }
+
+        .chat-header h1 {
+          font-size: 24px;
+        }
+
+        .message {
+          max-width: 90%;
+        }
+
+        .alternatives-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="chat-container">
+      <div class="chat-header">
+        <div class="status-indicator"></div>
+        <h1>🤖 Deana AI</h1>
+        <p>Your intelligent calendar management assistant</p>
+      </div>
+
+      <div class="chat-messages" id="chatMessages">
+        <div class="welcome-message">
+          <h2>Welcome to Deana!</h2>
+          <p>
+            I'm your AI assistant that helps you manage your calendar
+            intelligently. I can schedule meetings, check your availability, and
+            find the best times for your appointments.
+          </p>
+
+          <div class="features">
+            <div class="feature-card">
+              <h3>📅 Smart Scheduling</h3>
+              <p>
+                Schedule meetings with natural language. I'll find the best
+                available times and handle conflicts automatically.
+              </p>
+            </div>
+            <div class="feature-card">
+              <h3>🕐 Conflict Resolution</h3>
+              <p>
+                When there are scheduling conflicts, I'll suggest alternative
+                time slots that work for you.
+              </p>
+            </div>
+            <div class="feature-card">
+              <h3>📋 Calendar Management</h3>
+              <p>
+                Check your schedule, view upcoming meetings, and get insights
+                about your calendar.
+              </p>
+            </div>
+          </div>
+
+          <p style="margin-top: 25px; font-weight: 500; color: #495057">
+            Try asking me something like:
+          </p>
+          <ul
+            style="
+              text-align: left;
+              max-width: 400px;
+              margin: 15px auto;
+              color: #6c757d;
+            "
+          >
+            <li>"Create a meeting with John tomorrow at 2pm"</li>
+            <li>"What meetings do I have tomorrow?"</li>
+            <li>"Schedule a coffee chat next week"</li>
+            <li>"Book a 30-minute call with Sarah on Friday"</li>
+          </ul>
+        </div>
+      </div>
+
+      <div
+        class="progress-container"
+        id="progressContainer"
+        style="display: none"
+      >
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-text" id="progressText">Initializing...</div>
+        <button class="cancel-button" onclick="cancelRequest()">Cancel</button>
+      </div>
+
+      <div class="chat-input">
+        <input
+          type="text"
+          id="messageInput"
+          placeholder="Ask me to schedule a meeting, check your calendar, or anything else..."
+          onkeypress="handleKeyPress(event)"
+        />
+        <button class="send-button" id="sendButton" onclick="sendMessage()">
+          📤
+        </button>
+      </div>
+    </div>
+
+    <script>
+      let abortController = null;
+      let currentSessionId = null;
+
+      // Initialize session
+      async function initializeSession() {
+        try {
+          const response = await fetch('/api/sessions', { method: 'POST' });
+          const data = await response.json();
+          currentSessionId = data.sessionId;
+          console.log('Session initialized:', currentSessionId);
+        } catch (error) {
+          console.error('Failed to initialize session:', error);
+        }
+      }
+
+      // Initialize on page load
+      initializeSession();
+
+      function addMessage(
+        content,
+        role = 'assistant',
+        alternatives = null,
+        isError = false
+      ) {
+        const chatMessages = document.getElementById('chatMessages');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${role} ${isError ? 'error' : ''}`;
+
+        const timestamp = new Date().toLocaleTimeString();
+
+        let alternativesHtml = '';
+        if (alternatives && alternatives.length > 0) {
+          alternativesHtml = `
+                    <div class="alternatives">
+                        <h4>🕐 Alternative Time Slots:</h4>
+                        <div class="alternatives-grid">
+                            ${alternatives
+                              .map(
+                                (alt, i) => `
+                                <button class="alternative-option" onclick="selectAlternative(${i})">
+                                    ${alt.label}: ${alt.timeDisplay}
+                                </button>
+                            `
+                              )
+                              .join('')}
+                        </div>
+                    </div>
+                `;
+        }
+
+        messageDiv.innerHTML = `
+                <div class="message-content">
+                    ${content}
+                    ${alternativesHtml}
+                </div>
+                <div class="message-timestamp">${timestamp}</div>
+            `;
+
+        chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+
+      function updateProgress(step, total, content) {
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+
+        progressContainer.style.display = 'flex';
+        progressFill.style.width = `${(step / total) * 100}%`;
+        progressText.textContent = `${content} (${step}/${total})`;
+      }
+
+      function hideProgress() {
+        document.getElementById('progressContainer').style.display = 'none';
+      }
+
+      async function sendMessage() {
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const message = messageInput.value.trim();
+
+        if (!message || sendButton.disabled) return;
+
+        // Add user message
+        addMessage(message, 'user');
+        messageInput.value = '';
+
+        // Disable input
+        sendButton.disabled = true;
+        messageInput.disabled = true;
+        sendButton.textContent = '⏳';
+
+        // Create abort controller
+        abortController = new AbortController();
+
+        try {
+          const response = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message,
+              sessionId: currentSessionId || 'default',
+              creds: {}, // Add your OAuth credentials here
+            }),
+            signal: abortController.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          let assistantMessage = {
+            content: '',
+            alternatives: null,
+            conflict: false,
+          };
+
+          function readStream() {
+            reader
+              .read()
+              .then(({ done, value }) => {
+                if (done) {
+                  sendButton.disabled = false;
+                  messageInput.disabled = false;
+                  sendButton.textContent = '📤';
+                  hideProgress();
+                  return;
+                }
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+
+                lines.forEach((line) => {
+                  if (line.startsWith('data: ')) {
+                    try {
+                      const data = JSON.parse(line.slice(6));
+                      handleEvent(data, assistantMessage);
+                    } catch (e) {
+                      // Ignore parsing errors
+                    }
+                  }
+                });
+
+                readStream();
+              })
+              .catch((error) => {
+                if (error.name === 'AbortError') {
+                  console.log('Request was aborted');
+                } else {
+                  console.error('Error reading stream:', error);
+                  addMessage(
+                    'Sorry, I encountered an error processing your request.',
+                    'assistant',
+                    null,
+                    true
+                  );
+                }
+                sendButton.disabled = false;
+                messageInput.disabled = false;
+                sendButton.textContent = '📤';
+                hideProgress();
+              });
+          }
+
+          readStream();
+        } catch (error) {
+          console.error('Error:', error);
+          addMessage(
+            'Sorry, I encountered an error. Please try again.',
+            'assistant',
+            null,
+            true
+          );
+          sendButton.disabled = false;
+          messageInput.disabled = false;
+          sendButton.textContent = '📤';
+          hideProgress();
+        }
+      }
+
+      function handleEvent(data, assistantMessage) {
+        switch (data.type) {
+          case 'thinking':
+            updateProgress(1, 5, data.content);
+            break;
+          case 'progress':
+            if (data.data && data.data.step) {
+              updateProgress(data.data.step, data.data.total, data.content);
+            } else {
+              updateProgress(2, 5, data.content);
+            }
+            break;
+          case 'response':
+            assistantMessage.content = data.content;
+            assistantMessage.alternatives = data.alternatives;
+            assistantMessage.conflict = data.conflict;
+            addMessage(data.content, 'assistant', data.alternatives);
+            break;
+          case 'error':
+            addMessage(`Error: ${data.content}`, 'assistant', null, true);
+            break;
+          case 'complete':
+            updateProgress(5, 5, 'Complete!');
+            break;
+        }
+      }
+
+      function cancelRequest() {
+        if (abortController) {
+          abortController.abort();
+        }
+        document.getElementById('sendButton').disabled = false;
+        document.getElementById('messageInput').disabled = false;
+        document.getElementById('sendButton').textContent = '📤';
+        hideProgress();
+      }
+
+      function handleKeyPress(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      }
+
+      function selectAlternative(index) {
+        // Handle alternative selection
+        console.log('Selected alternative:', index);
+        // You can implement logic here to create the event at the selected time
+      }
+
+      // Auto-focus input on page load
+      window.addEventListener('load', () => {
+        document.getElementById('messageInput').focus();
+      });
+    </script>
+  </body>
+</html>

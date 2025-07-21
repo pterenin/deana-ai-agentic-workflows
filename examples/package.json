@@ -1,0 +1,32 @@
+{
+  "name": "deana-ai-consumer-app",
+  "version": "1.0.0",
+  "description": "Consumer application for Deana AI Calendar Assistant with streaming agentic workflow",
+  "main": "ExpressIntegration.js",
+  "scripts": {
+    "start": "node ExpressIntegration.js",
+    "dev": "nodemon ExpressIntegration.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ai",
+    "calendar",
+    "assistant",
+    "streaming",
+    "express",
+    "nodejs"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

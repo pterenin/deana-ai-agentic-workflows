@@ -1,17 +1,16 @@
 {
-  "name": "temporal-money-transfer",
+  "name": "deana-agent-workflow",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "build": "tsc --build",
     "build.watch": "tsc --build --watch",
-    "client": "ts-node src/client.ts",
     "format": "prettier --write .",
     "lint": "eslint src",
-    "server": "ts-node src/http-server.ts",
-    "test": "mocha --exit --require ts-node/register --require source-map-support/register src/mocha/*.test.ts",
-    "worker": "ts-node src/worker.ts",
-    "worker.watch": "nodemon src/worker.ts"
+    "agents-server": "ts-node src/agents-server.ts",
+    "streaming-server": "ts-node src/streaming-agents-server.ts",
+    "test-agent": "ts-node src/test-agent.ts",
+    "dev": "ts-node src/streaming-agents-server.ts"
   },
   "nodemonConfig": {
     "execMap": {
@@ -23,21 +22,19 @@
     ]
   },
   "dependencies": {
-    "@temporalio/activity": "^1.11.7",
-    "@temporalio/client": "^1.11.7",
-    "@temporalio/common": "^1.11.7",
-    "@temporalio/worker": "^1.11.7",
-    "@temporalio/workflow": "^1.11.7",
+    "@types/cors": "^2.8.19",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
     "googleapis": "^153.0.0",
-    "mocha": "^10.2.0",
-    "nanoid": "3.x",
-    "openai": "^4.104.0"
+    "luxon": "^3.7.1",
+    "nodemailer": "^7.0.5",
+    "openai": "^4.104.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@temporalio/testing": "^1.11.7",
     "@tsconfig/node18": "^1.0.0",
     "@types/jest": "^29.5.5",
-    "@types/mocha": "^10.0.2",
+    "@types/nodemailer": "^6.4.17",
     "@typescript-eslint/eslint-plugin": "^6.7.3",
     "@typescript-eslint/parser": "^6.7.3",
     "eslint": "^7.32.0",
