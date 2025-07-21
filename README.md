@@ -1,17 +1,29 @@
-# Temporal Money Transfer example in TypeScript
+# Deana AI - Streaming Agentic Workflow
 
-This is the companion code for the tutorial [Run your first Temporal Application with TypeScript](https://learn.temporal.io/getting_started/typescript/first_program_in_typescript).
+An intelligent calendar management assistant with real-time streaming progress updates.
 
-### Running this sample:
+## 🚀 Quick Start
 
-1. Make sure Temporal Server is running locally (see the [quick install guide](https://docs.temporal.io/server/quick-install/)).
-1. `npm install` to install dependencies.
-1. `npm run worker` to start the Worker.
-1. In another shell, `npm run client` to run the Workflow Client.
+1. `npm install` to install dependencies
+2. `npm run dev` to start the streaming server
+3. Open your browser to test the API endpoints
 
-The Workflow will return:
+## 📡 API Endpoints
 
-```bash
-Started Workflow workflow-OyIhuWr6X4opgqtYnhxuX with RunID a85055c8-3fce-466e-b4f6-8f66c16614e6
-Transfer complete (transaction IDs: w1328871163, d0590412617)
-```
+- **Streaming Chat**: `POST /api/chat/stream` - Real-time progress updates
+- **Regular Chat**: `POST /api/chat` - Standard JSON responses
+- **Health Check**: `GET /health` - Server status
+
+## 🎯 Features
+
+- 🤖 **AI Calendar Assistant** - Natural language calendar management
+- 📊 **Real-time Progress** - See what the AI is doing step-by-step
+- 🕐 **Conflict Resolution** - Automatic alternative time slot suggestions
+- 📱 **Mobile Responsive** - Works on all devices
+- 🔄 **Request Cancellation** - Cancel long-running operations
+
+## 📚 Documentation
+
+- [Consumer App Guide](CONSUMER_APP_GUIDE.md) - Complete integration guide
+- [Express.js Setup](examples/EXPRESS_SETUP_GUIDE.md) - Express.js integration
+- [Streaming Guide](STREAMING_GUIDE.md) - Streaming implementation details

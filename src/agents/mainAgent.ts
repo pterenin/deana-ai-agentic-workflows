@@ -361,6 +361,10 @@ export async function runMainAgent(
               'DEBUG: functionArgs for createEvent:',
               JSON.stringify(functionArgs, null, 2)
             );
+            // After calling the handler and getting a successful result:
+            // Instead of hardcoding an email step, feed the event details and conversation context back to the LLM
+            // and let it decide if a sendEmail tool call is needed.
+            // This is done by continuing the main agent loop with the new tool result and updated messages.
           }
           if (functionName === 'updateEvent') {
             const participantNames = extractParticipantNames(userMessage);
