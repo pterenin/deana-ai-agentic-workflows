@@ -21,7 +21,6 @@ export const conflictTools: ChatCompletionTool[] = [
           },
           calendarId: {
             type: 'string',
-            default: 'tps8327@gmail.com',
             description: 'Calendar ID to check',
           },
         },
@@ -51,13 +50,21 @@ export const conflictTools: ChatCompletionTool[] = [
           },
           calendarId: {
             type: 'string',
-            default: 'tps8327@gmail.com',
             description: 'Calendar ID to create event in',
           },
           timeZone: {
             type: 'string',
             default: 'America/Los_Angeles',
             description: 'Timezone for the event',
+          },
+          attendees: {
+            type: 'array',
+            description:
+              'List of attendee email addresses to invite to the event',
+            items: {
+              type: 'string',
+              description: 'Email address of attendee',
+            },
           },
         },
         required: ['summary', 'startISO', 'endISO'],

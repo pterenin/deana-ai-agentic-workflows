@@ -11,7 +11,6 @@ export const calendarTools: ChatCompletionTool[] = [
         properties: {
           calendarId: {
             type: 'string',
-            default: 'tps8327@gmail.com',
             description: 'Calendar ID to query',
           },
           timeMin: {
@@ -30,14 +29,14 @@ export const calendarTools: ChatCompletionTool[] = [
   {
     type: 'function' as const,
     function: {
-      name: 'createEvent',
-      description: 'Create a simple event in Google Calendar',
+      name: 'createEventWithContacts',
+      description:
+        'Create a calendar event and automatically invite contacts by name. Use this for meetings with specific people (e.g., "meeting with John", "lunch with Mike and Sarah"). This will look up contact emails and add them as attendees so the event appears in their calendars.',
       parameters: {
         type: 'object',
         properties: {
           calendarId: {
             type: 'string',
-            default: 'tps8327@gmail.com',
             description: 'Calendar ID to create event in',
           },
           summary: {
@@ -57,6 +56,68 @@ export const calendarTools: ChatCompletionTool[] = [
             default: 'America/Los_Angeles',
             description: 'Timezone for the event',
           },
+          contactNames: {
+            type: 'array',
+            description:
+              'List of contact names to look up and invite (e.g., ["John", "Sarah"])',
+            items: {
+              type: 'string',
+              description: 'Name of contact to look up and invite',
+            },
+          },
+          additionalEmails: {
+            type: 'array',
+            description:
+              'Additional email addresses to invite (for contacts not in Google Contacts)',
+            items: {
+              type: 'string',
+              description: 'Email address to invite',
+            },
+          },
+        },
+        required: ['summary', 'start', 'end'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'createEvent',
+      description:
+        'Create a simple calendar event WITHOUT inviting other people. Use this for personal appointments, reminders, or events where you do not need to invite contacts (e.g., "doctor appointment", "gym session", "reminder to call mom").',
+      parameters: {
+        type: 'object',
+        properties: {
+          calendarId: {
+            type: 'string',
+            description: 'Calendar ID to create event in',
+          },
+          summary: {
+            type: 'string',
+            description: 'Event title/summary',
+          },
+          start: {
+            type: 'string',
+            description: 'Start time in ISO format',
+          },
+          end: {
+            type: 'string',
+            description: 'End time in ISO format',
+          },
+          timeZone: {
+            type: 'string',
+            default: 'America/Los_Angeles',
+            description: 'Timezone for the event',
+          },
+          attendees: {
+            type: 'array',
+            description:
+              'List of attendee email addresses to invite to the event',
+            items: {
+              type: 'string',
+              description: 'Email address of attendee',
+            },
+          },
         },
         required: ['summary', 'start', 'end'],
       },
@@ -72,7 +133,6 @@ export const calendarTools: ChatCompletionTool[] = [
         properties: {
           calendarId: {
             type: 'string',
-            default: 'tps8327@gmail.com',
             description: 'Calendar ID containing the event',
           },
           eventId: {
@@ -106,7 +166,6 @@ export const calendarTools: ChatCompletionTool[] = [
         properties: {
           calendarId: {
             type: 'string',
-            default: 'tps8327@gmail.com',
             description: 'Calendar ID containing the event',
           },
           eventId: {
@@ -128,7 +187,6 @@ export const calendarTools: ChatCompletionTool[] = [
         properties: {
           calendarId: {
             type: 'string',
-            default: 'tps8327@gmail.com',
             description: 'Calendar ID containing the events',
           },
           eventIds: {

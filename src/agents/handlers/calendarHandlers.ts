@@ -15,7 +15,7 @@ export const calendarHandlers = {
   ) => {
     try {
       console.log('🔍 [getEvents] Starting with params:', {
-        calendarId: args.calendarId || 'tps8327@gmail.com',
+        calendarId: args.calendarId,
         timeMin: args.timeMin,
         timeMax: args.timeMax,
         credsKeys: creds ? Object.keys(creds) : 'null',
@@ -28,7 +28,7 @@ export const calendarHandlers = {
 
       const events = await getEvents(
         creds,
-        args.calendarId || 'tps8327@gmail.com',
+        args.calendarId,
         args.timeMin,
         args.timeMax
       );
@@ -73,7 +73,7 @@ export const calendarHandlers = {
 
     const events = await getEvents(
       creds,
-      args.calendarId || 'tps8327@gmail.com',
+      args.calendarId,
       args.start,
       args.end
     );
@@ -128,7 +128,7 @@ export const calendarHandlers = {
 
         const altEvents = await getEvents(
           creds,
-          args.calendarId || 'tps8327@gmail.com',
+          args.calendarId,
           altStartISO,
           altEndISO
         );
@@ -154,6 +154,11 @@ export const calendarHandlers = {
         conflict: true,
         conflictingEvents: events,
         alternatives: availableAlternatives,
+        originalEvent: {
+          summary: args.summary,
+          attendees: args.attendees, // Preserve attendees for alternatives
+          timeZone: args.timeZone || 'America/Los_Angeles',
+        },
         message: `I found a scheduling conflict for your "${
           args.summary
         }" meeting at ${new Date(args.start).toLocaleTimeString('en-US', {
@@ -184,17 +189,13 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
         'DEBUG: args for createEvent in handler:',
         JSON.stringify(args, null, 2)
       );
-      const result = await createEvent(
-        creds,
-        args.calendarId || 'tps8327@gmail.com',
-        {
-          start: args.start,
-          end: args.end,
-          summary: args.summary,
-          timeZone: args.timeZone || 'America/Los_Angeles',
-          attendees: args.attendees, // Pass attendees if present
-        }
-      );
+      const result = await createEvent(creds, args.calendarId, {
+        start: args.start,
+        end: args.end,
+        summary: args.summary,
+        timeZone: args.timeZone || 'America/Los_Angeles',
+        attendees: args.attendees, // Pass attendees if present
+      });
 
       onProgress?.({
         type: 'progress',
@@ -218,6 +219,92 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
     }
   },
 
+  createEventWithContacts: async (
+    args: any,
+    creds: any,
+    onProgress?: (update: any) => void
+  ) => {
+    const attendeeEmails = [];
+
+    // Look up contacts by name
+    if (args.contactNames && args.contactNames.length > 0) {
+      onProgress?.({
+        type: 'progress',
+        content: `Looking up ${args.contactNames.length} contact(s)...`,
+      });
+
+      for (const contactName of args.contactNames) {
+        onProgress?.({
+          type: 'progress',
+          content: `Looking up contact: ${contactName}...`,
+        });
+
+        try {
+          const email = await findContactEmailByName(creds, contactName);
+          if (email) {
+            attendeeEmails.push(email);
+            onProgress?.({
+              type: 'progress',
+              content: `Found ${contactName}: ${email}`,
+            });
+          } else {
+            onProgress?.({
+              type: 'progress',
+              content: `No contact found for: ${contactName}`,
+            });
+          }
+        } catch (error: any) {
+          onProgress?.({
+            type: 'progress',
+            content: `Error looking up ${contactName}: ${error.message}`,
+          });
+        }
+      }
+    }
+
+    // Add additional emails
+    if (args.additionalEmails && args.additionalEmails.length > 0) {
+      attendeeEmails.push(...args.additionalEmails);
+      onProgress?.({
+        type: 'progress',
+        content: `Added ${args.additionalEmails.length} additional email(s)`,
+      });
+    }
+
+    // Debug logging
+    console.log('DEBUG: attendees array after lookup:', attendeeEmails);
+    console.log(
+      'DEBUG: functionArgs for createEvent:',
+      JSON.stringify(
+        {
+          summary: args.summary,
+          start: args.start,
+          end: args.end,
+          attendees: attendeeEmails.length > 0 ? attendeeEmails : undefined,
+        },
+        null,
+        2
+      )
+    );
+
+    // Create the event with attendees
+    const createEventArgs = {
+      calendarId: args.calendarId,
+      summary: args.summary,
+      start: args.start,
+      end: args.end,
+      timeZone: args.timeZone,
+      attendees: attendeeEmails.length > 0 ? attendeeEmails : undefined,
+    };
+
+    // Use the existing createEvent handler
+    return await calendarHandlers.createEvent(
+      createEventArgs,
+      creds,
+      onProgress
+    );
+  },
+
   updateEvent: async (
     args: any,
     creds: any,
@@ -229,16 +316,11 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
         content: `Updating event "${args.eventId}"...`,
       });
 
-      const result = await updateEvent(
-        creds,
-        args.calendarId || 'tps8327@gmail.com',
-        args.eventId,
-        {
-          start: args.start,
-          end: args.end,
-          summary: args.summary,
-        }
-      );
+      const result = await updateEvent(creds, args.calendarId, args.eventId, {
+        start: args.start,
+        end: args.end,
+        summary: args.summary,
+      });
 
       onProgress?.({
         type: 'progress',
@@ -283,16 +365,12 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
         '[Calendar Handler] About to call deleteEvent function with:',
         {
           creds: creds ? 'present' : 'missing',
-          calendarId: args.calendarId || 'tps8327@gmail.com',
+          calendarId: args.calendarId,
           eventId: args.eventId,
         }
       );
 
-      const result = await deleteEvent(
-        creds,
-        args.calendarId || 'tps8327@gmail.com',
-        args.eventId
-      );
+      const result = await deleteEvent(creds, args.calendarId, args.eventId);
 
       console.log('[Calendar Handler] deleteEvent function returned:', result);
 
@@ -344,11 +422,7 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
         });
 
         try {
-          const result = await deleteEvent(
-            creds,
-            args.calendarId || 'tps8327@gmail.com',
-            eventId
-          );
+          const result = await deleteEvent(creds, args.calendarId, eventId);
           results.push({ eventId, success: true, result });
         } catch (error: any) {
           console.error(
@@ -424,18 +498,49 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
       type: 'progress',
       content: `Looking up contact: ${args.name}...`,
     });
-    const email = await findContactEmailByName(creds, args.name);
-    if (email) {
-      onProgress?.({
-        type: 'progress',
-        content: `Found contact email: ${email}`,
-      });
-    } else {
-      onProgress?.({
-        type: 'progress',
-        content: `No contact found for name: ${args.name}`,
-      });
+
+    try {
+      const email = await findContactEmailByName(creds, args.name);
+      if (email) {
+        onProgress?.({
+          type: 'progress',
+          content: `Found contact email: ${email}`,
+        });
+        return { email };
+      } else {
+        onProgress?.({
+          type: 'progress',
+          content: `No contact found for name: ${args.name}`,
+        });
+        return { email: null };
+      }
+    } catch (error: any) {
+      // Check if this is a People API not enabled error
+      if (
+        error.code === 403 &&
+        error.message?.includes('People API has not been used')
+      ) {
+        onProgress?.({
+          type: 'progress',
+          content: `Google People API is not enabled. Contact lookup unavailable.`,
+        });
+        return {
+          email: null,
+          error:
+            'Google People API not enabled - please enable it in Google Cloud Console',
+        };
+      } else {
+        onProgress?.({
+          type: 'progress',
+          content: `Error accessing contacts: ${
+            error.message || 'Unknown error'
+          }`,
+        });
+        return {
+          email: null,
+          error: `Contact lookup failed: ${error.message || 'Unknown error'}`,
+        };
+      }
     }
-    return { email };
   },
 };
