@@ -6,20 +6,6 @@ import {
   BookingAgentContext,
 } from './agents/modern/modernBookingAgent';
 
-// Helper function to remove timezone abbreviations from responses
-function removeTimezoneAbbreviations(content: string): string {
-  if (!content) return content;
-
-  // Remove common timezone abbreviations in parentheses only
-  // This preserves AM/PM while removing timezone info
-  return content
-    .replace(
-      /\s*\((PDT|PST|UTC|EST|EDT|CST|CDT|MST|MDT|GMT|BST|CET|JST|IST)\)/g,
-      ''
-    ) // Remove specific timezone abbreviations in parentheses
-    .replace(/\s*\([A-Z]{3,4}\)/g, ''); // Remove other 3-4 letter abbreviations in parentheses (but not AM/PM)
-}
-
 const app = express();
 const PORT = process.env.PORT || 3060;
 
@@ -27,14 +13,13 @@ const PORT = process.env.PORT || 3060;
 app.use(cors());
 app.use(express.json());
 
-// In-memory conversation context
+// Store conversation contexts
 const conversationContexts = new Map<string, any>();
 
 // Enhanced main agent runner that uses modern booking for booking intents
 async function runEnhancedMainAgent(
   userMessage: string,
   creds: any,
-  email: string,
   context: any,
   onProgress?: (update: any) => void
 ): Promise<any> {
@@ -61,7 +46,7 @@ async function runEnhancedMainAgent(
     };
 
     // Use modern booking agent
-    const modernBookingAgent = new ModernBookingAgent(creds, email, onProgress);
+    const modernBookingAgent = new ModernBookingAgent(creds, onProgress);
     const result = await modernBookingAgent.processBookingRequest(
       userMessage,
       bookingContext
@@ -82,91 +67,93 @@ async function runEnhancedMainAgent(
     };
   } else {
     // Use original main agent for non-booking requests
-    return await runMainAgent(userMessage, creds, email, context, onProgress);
+    return await runMainAgent(userMessage, creds, context, onProgress);
   }
 }
 
-// Streaming endpoint for multi-step agent responses
-app.post('/api/chat/stream', async (req, res) => {
-  const { message, sessionId = 'default', creds, email } = req.body;
+// Streaming endpoint
+app.get('/api/chat/stream', async (req, res) => {
+  const { message, sessionId: providedSessionId } = req.query;
 
-  if (!message) {
-    return res.status(400).json({ error: 'Message is required' });
+  if (!message || typeof message !== 'string') {
+    res.status(400).json({ error: 'Message parameter is required' });
+    return;
   }
 
-  // Set headers for Server-Sent Events
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Cache-Control',
-  });
+  const sessionId = (providedSessionId as string) || 'default';
 
-  try {
-    // Get or create conversation context
-    let context = conversationContexts.get(sessionId);
-    if (!context) {
-      context = { history: [] };
-      conversationContexts.set(sessionId, context);
-    }
+  // Set up SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
 
-    // Add current message to context
-    context.history.push({ role: 'user', content: message });
+  console.log(
+    `[Enhanced Server] Processing message for session ${sessionId}: ${message}`
+  );
 
-    console.log(
-      `[Streaming Server] Processing message for session ${sessionId}:`,
-      message
-    );
+  // Get or create conversation context
+  let context = conversationContexts.get(sessionId);
+  if (!context) {
+    context = {
+      sessionId,
+      history: [],
+    };
+    conversationContexts.set(sessionId, context);
+  }
 
-    // Send initial "thinking" message
+  // Send initial thinking signal
+  res.write(
+    `data: ${JSON.stringify({
+      type: 'thinking',
+      timestamp: new Date().toISOString(),
+    })}\n\n`
+  );
+
+  // Progress callback
+  const onProgress = (update: any) => {
+    console.log('🔍 [Enhanced Server] Progress update:', update);
     res.write(
       `data: ${JSON.stringify({
-        type: 'thinking',
-        content: 'Processing your request...',
+        type: update.type,
+        content: update.content,
+        data: update.data,
         timestamp: new Date().toISOString(),
       })}\n\n`
     );
+  };
 
-    // Run the enhanced agent with progress updates
+  try {
+    // Use enhanced main agent with modern booking integration
+    const mockCredentials = {
+      access_token: process.env.GOOGLE_ACCESS_TOKEN || 'mock_access_token',
+      refresh_token: process.env.GOOGLE_REFRESH_TOKEN || 'mock_refresh_token',
+      expires_at: process.env.GOOGLE_EXPIRES_AT || '1234567890',
+    };
+
     const result = await runEnhancedMainAgent(
       message,
-      creds,
-      email,
+      mockCredentials,
       context,
-      (update) => {
-        // Send progress update to client
-        console.log('🔍 [Streaming Server] Progress update:', update);
-        res.write(
-          `data: ${JSON.stringify({
-            type: update.type,
-            content: update.content,
-            data: update.data,
-            timestamp: new Date().toISOString(),
-          })}\n\n`
-        );
-      }
+      onProgress
     );
 
-    // Send the main response (with timezone removal)
-    const cleanedContent = removeTimezoneAbbreviations(
-      result.response || result.content
-    );
+    // Send the main response
     res.write(
       `data: ${JSON.stringify({
         type: 'response',
-        content: cleanedContent, // Apply timezone removal
-        alternatives: result.alternatives,
-        conflict: result.conflict,
+        content: result.response,
+        alternatives: result.alternatives || [],
+        conflict: result.conflict || false,
         timestamp: new Date().toISOString(),
       })}\n\n`
     );
 
-    // Add agent response to context (with cleaned content)
-    context.history.push({
-      role: 'assistant',
-      content: cleanedContent,
-    });
+    // Update conversation history
+    context.history.push(
+      { role: 'user', content: message },
+      { role: 'assistant', content: result.response || result.content }
+    );
 
     // Send completion signal
     res.write(
@@ -175,8 +162,8 @@ app.post('/api/chat/stream', async (req, res) => {
         timestamp: new Date().toISOString(),
       })}\n\n`
     );
-  } catch (error) {
-    console.error('[Streaming Server] Error:', error);
+  } catch (error: any) {
+    console.error('[Enhanced Server] Error:', error);
 
     // Send error message
     res.write(
@@ -194,7 +181,7 @@ app.post('/api/chat/stream', async (req, res) => {
 
 // Regular endpoint for backward compatibility
 app.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', creds, email } = req.body;
+  const { message, sessionId = 'default', creds } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
@@ -204,17 +191,29 @@ app.post('/api/chat', async (req, res) => {
     // Get or create conversation context
     let context = conversationContexts.get(sessionId);
     if (!context) {
-      context = { history: [] };
+      context = {
+        sessionId,
+        history: [],
+      };
       conversationContexts.set(sessionId, context);
     }
 
     console.log(
-      `[Streaming Server] Processing message for session ${sessionId}:`,
-      message
+      `[Enhanced Server] Processing message for session ${sessionId}: ${message}`
     );
 
+    const mockCredentials = creds || {
+      access_token: process.env.GOOGLE_ACCESS_TOKEN || 'mock_access_token',
+      refresh_token: process.env.GOOGLE_REFRESH_TOKEN || 'mock_refresh_token',
+      expires_at: process.env.GOOGLE_EXPIRES_AT || '1234567890',
+    };
+
     // Use enhanced main agent
-    const result = await runEnhancedMainAgent(message, creds, email, context);
+    const result = await runEnhancedMainAgent(
+      message,
+      mockCredentials,
+      context
+    );
 
     // Update conversation history
     context.history.push(
@@ -230,7 +229,7 @@ app.post('/api/chat', async (req, res) => {
       usage: result.usage,
     });
   } catch (error) {
-    console.error('[Streaming Server] Error:', error);
+    console.error('[Enhanced Server] Error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -240,7 +239,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    agent: 'enhanced-streaming-server-with-modern-booking',
+    agent: 'enhanced-main-agent-with-modern-booking',
   });
 });
 

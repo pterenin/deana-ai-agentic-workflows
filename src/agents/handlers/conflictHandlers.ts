@@ -67,11 +67,12 @@ export const conflictHandlers = {
   },
 
   createEventAtAlternative: async (args: any, creds: any) => {
-    return await createEvent(creds, args.calendarId || 'tps8327@gmail.com', {
+    return await createEvent(creds, args.calendarId, {
       start: args.startISO,
       end: args.endISO,
       summary: args.summary,
       timeZone: args.timeZone || 'America/Los_Angeles',
+      attendees: args.attendees, // Pass attendees to preserve invitations
     });
   },
 };

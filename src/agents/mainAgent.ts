@@ -3,6 +3,19 @@ import { allTools } from './tools';
 import { allHandlers } from './handlers';
 import { getMainAgentPrompt } from './prompts/mainAgentPrompt';
 import { getCurrentDateContext } from './utils/dateUtils';
+import { bookAppointmentAgent } from './bookAppointmentAgent';
+
+// Helper function to remove timezone abbreviations from responses
+function removeTimezoneAbbreviations(content: string): string {
+  // Remove common timezone abbreviations in parentheses only
+  // This preserves AM/PM while removing timezone info
+  return content
+    .replace(
+      /\s*\((PDT|PST|UTC|EST|EDT|CST|CDT|MST|MDT|GMT|BST|CET|JST|IST)\)/g,
+      ''
+    ) // Remove specific timezone abbreviations in parentheses
+    .replace(/\s*\([A-Z]{3,4}\)/g, ''); // Remove other 3-4 letter abbreviations in parentheses (but not AM/PM)
+}
 
 // Helper function to find events to delete based on user request
 function findEventsToDelete(events: any[], userRequest: string): any[] {
@@ -258,9 +271,196 @@ const functionHandlers = allHandlers;
 export async function runMainAgent(
   userMessage: string,
   creds: any,
+  email?: string,
   context?: any,
   onProgress?: (update: { type: string; content: string; data?: any }) => void
 ): Promise<any> {
+  // Booking intent detection (simple)
+  const bookingIntent =
+    /book.*(appointment|hair|barber|cut|massage|nail|doctor|dentist)/i.test(
+      userMessage
+    );
+  if (bookingIntent) {
+    onProgress?.({
+      type: 'progress',
+      content: 'Detected booking intent. Delegating to BookAppointmentAgent...',
+    });
+    // Check if user is selecting an alternative
+    if (
+      context &&
+      context.lastBookingConflict &&
+      context.lastBookingConflict.alternatives
+    ) {
+      // Try to match user selection to an alternative
+      let selectedAlt = null;
+
+      // First, try ordinal matching (first, second, third, 1, 2, 3)
+      const altMatch = userMessage.match(
+        /(1|first|one|2|second|two|3|third|three)/i
+      );
+      if (altMatch) {
+        const idx =
+          altMatch[1] === '1' || /first|one/i.test(altMatch[1])
+            ? 0
+            : altMatch[1] === '2' || /second|two/i.test(altMatch[1])
+            ? 1
+            : altMatch[1] === '3' || /third|three/i.test(altMatch[1])
+            ? 2
+            : null;
+        if (idx !== null && context.lastBookingConflict.alternatives[idx]) {
+          selectedAlt = context.lastBookingConflict.alternatives[idx];
+        }
+      }
+
+      // If no ordinal match, try time-based matching (9am, 10am, etc.)
+      if (!selectedAlt) {
+        const timeMatch = userMessage.match(/(\d{1,2})(:\d{2})?\s*(am|pm)?/i);
+        if (timeMatch) {
+          let requestedHour = parseInt(timeMatch[1], 10);
+          const requestedMinute = timeMatch[2]
+            ? parseInt(timeMatch[2].slice(1), 10)
+            : 0;
+
+          // Handle AM/PM conversion
+          if (timeMatch[3]) {
+            const ampm = timeMatch[3].toLowerCase();
+            if (ampm === 'pm' && requestedHour < 12) {
+              requestedHour += 12;
+            } else if (ampm === 'am' && requestedHour === 12) {
+              requestedHour = 0;
+            }
+          } else if (requestedHour >= 1 && requestedHour <= 7) {
+            // Assume PM for times 1-7 without AM/PM specified
+            requestedHour += 12;
+          }
+
+          // Find matching alternative by comparing times
+          for (const alt of context.lastBookingConflict.alternatives) {
+            const altTime = new Date(alt.startISO);
+            if (
+              altTime.getHours() === requestedHour &&
+              altTime.getMinutes() === requestedMinute
+            ) {
+              selectedAlt = alt;
+              break;
+            }
+          }
+        }
+      }
+      if (selectedAlt) {
+        // Re-invoke booking agent with selected alternative time
+        const altUserRequest = `Book a hair appointment at ${selectedAlt.start.toLocaleTimeString(
+          'en-US',
+          { hour: 'numeric', minute: '2-digit', hour12: true }
+        )} on ${selectedAlt.start.toLocaleDateString('en-US')}`;
+        const result = await bookAppointmentAgent(
+          altUserRequest,
+          creds,
+          email,
+          onProgress
+        );
+        if (result.conflict) {
+          // Still a conflict (should be rare)
+          return {
+            response: result.message,
+            alternatives: result.alternatives,
+            context: { lastBookingConflict: result },
+          };
+        }
+        // Proceed as normal with call, event, and summary
+        const { transcript, callDetails, appointment } = result;
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const prompt = `You are a helpful assistant. Summarize the following call transcript for the user, confirming the appointment details in a friendly, human way.\n\nAppointment details: ${JSON.stringify(
+          appointment,
+          null,
+          2
+        )}\n\nCall transcript: ${transcript}`;
+        let completion;
+        try {
+          completion = await openai.chat.completions.create({
+            model: 'gpt-4o',
+            messages: [{ role: 'user', content: prompt }],
+          });
+        } catch (err) {
+          return {
+            response:
+              "Sorry, I couldn't connect to the language model. Please check your API key and try again.",
+            transcript,
+            callDetails,
+            appointment,
+          };
+        }
+        const message = completion.choices?.[0]?.message?.content;
+        return {
+          response: message,
+          transcript,
+          callDetails,
+          appointment,
+        };
+      } else {
+        // User did not select a valid alternative
+        return {
+          response:
+            'Please select one of the available alternative time slots by saying "first", "second", or "third".',
+          alternatives: context.lastBookingConflict.alternatives,
+          context: { lastBookingConflict: context.lastBookingConflict },
+        };
+      }
+    }
+    // Normal booking flow
+    const result = await bookAppointmentAgent(
+      userMessage,
+      creds,
+      email,
+      onProgress
+    );
+
+    // Handle errors from booking agent
+    if (result.error) {
+      return {
+        response: `I'm sorry, I encountered an issue while trying to book your appointment: ${result.message}. Please try again with a more specific request, like "Book a hair appointment tomorrow at 2pm".`,
+      };
+    }
+
+    if (result.conflict) {
+      // Return alternatives and store in context
+      return {
+        response: result.message,
+        alternatives: result.alternatives,
+        context: { lastBookingConflict: result },
+      };
+    }
+    // Proceed as normal with call, event, and summary
+    const { transcript, callDetails, appointment } = result;
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = `You are a helpful assistant. Summarize the following call transcript for the user, confirming the appointment details in a friendly, human way.\n\nAppointment details: ${JSON.stringify(
+      appointment,
+      null,
+      2
+    )}\n\nCall transcript: ${transcript}`;
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: prompt }],
+      });
+    } catch (err) {
+      return {
+        response:
+          "Sorry, I couldn't connect to the language model. Please check your API key and try again.",
+        transcript,
+        callDetails,
+        appointment,
+      };
+    }
+    const message = completion.choices?.[0]?.message?.content;
+    return {
+      response: message,
+      transcript,
+      callDetails,
+      appointment,
+    };
+  }
   try {
     onProgress?.({
       type: 'progress',
@@ -275,7 +475,13 @@ export async function runMainAgent(
       },
     ];
     if (context?.history) {
-      messages.push(...context.history);
+      // Filter out messages with null/undefined content to prevent OpenAI errors
+      const validHistory = context.history.filter(
+        (msg: any) => msg && msg.content && typeof msg.content === 'string'
+      );
+      messages.push(...validHistory);
+      // Always add the current user message
+      messages.push({ role: 'user', content: userMessage });
     } else {
       messages.push({ role: 'user', content: userMessage });
     }
@@ -310,6 +516,16 @@ export async function runMainAgent(
         for (const toolCall of responseMessage.tool_calls) {
           const functionName = toolCall.function.name;
           const functionArgs = JSON.parse(toolCall.function.arguments);
+
+          // Inject email into function args if provided
+          if (email && !functionArgs.calendarId) {
+            functionArgs.calendarId = email;
+          }
+
+          // Inject email as 'from' parameter for sendEmail calls
+          if (email && functionName === 'sendEmail' && !functionArgs.from) {
+            functionArgs.from = email;
+          }
           onProgress?.({
             type: 'progress',
             content: `Calling ${functionName}...`,
@@ -418,6 +634,54 @@ export async function runMainAgent(
               JSON.stringify(functionArgs, null, 2)
             );
           }
+          if (functionName === 'createEventAtAlternative') {
+            // Check if there was a recent conflict with attendees in the conversation history
+            const recentMessages = messages.slice(-10); // Check last 10 messages
+            let attendeesFromConflict: string[] = [];
+
+            for (const msg of recentMessages) {
+              if (msg.role === 'tool' && msg.content) {
+                try {
+                  const toolResult = JSON.parse(msg.content);
+                  if (
+                    toolResult.conflict &&
+                    toolResult.originalEvent &&
+                    toolResult.originalEvent.attendees
+                  ) {
+                    attendeesFromConflict =
+                      toolResult.originalEvent.attendees.map((a: any) =>
+                        typeof a === 'string' ? a : a.email
+                      );
+                    console.log(
+                      'DEBUG: Found attendees from recent conflict:',
+                      attendeesFromConflict
+                    );
+                    break;
+                  }
+                } catch (e) {
+                  // Ignore parsing errors
+                }
+              }
+            }
+
+            // Merge attendees from conflict with any provided attendees
+            let existingAttendees = [];
+            if (functionArgs.attendees) {
+              existingAttendees = functionArgs.attendees.map((a: any) =>
+                typeof a === 'string' ? a : a.email
+              );
+            }
+            const allAttendees = Array.from(
+              new Set([...existingAttendees, ...attendeesFromConflict])
+            );
+            if (allAttendees.length > 0) {
+              functionArgs.attendees = allAttendees;
+            }
+            console.log(
+              'DEBUG: functionArgs for createEventAtAlternative:',
+              JSON.stringify(functionArgs, null, 2)
+            );
+          }
           if (functionHandlers[functionName as keyof typeof functionHandlers]) {
             const result = await functionHandlers[
               functionName as keyof typeof functionHandlers
@@ -449,17 +713,22 @@ export async function runMainAgent(
       }
       // If the LLM response is a user-facing message (not a tool call), return it
       if (responseMessage.content) {
+        // Post-process to remove timezone abbreviations
+        const cleanedContent = removeTimezoneAbbreviations(
+          responseMessage.content
+        );
         return {
-          content: responseMessage.content,
+          content: cleanedContent,
         };
       }
       // If neither, break
       break;
     }
     // Fallback: return the last response content or a generic message
+    const fallbackContent =
+      lastResponse?.content || 'Sorry, I was unable to process your request.';
     return {
-      content:
-        lastResponse?.content || 'Sorry, I was unable to process your request.',
+      content: removeTimezoneAbbreviations(fallbackContent),
     };
   } catch (error) {
     console.error('[Main Agent] Error:', error);
