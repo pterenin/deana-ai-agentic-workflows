@@ -5,13 +5,15 @@ export const calendarTools: ChatCompletionTool[] = [
     type: 'function' as const,
     function: {
       name: 'getEvents',
-      description: 'Get events from Google Calendar for a specific time range',
+      description:
+        'Get events from Google Calendar. CRITICAL: For general schedule questions like "How does my day look?", "Do I have meetings today?", "What\'s my schedule?", you MUST completely OMIT the calendarId parameter to check ALL calendars. Only include calendarId when user explicitly mentions a specific calendar like "work calendar" or "personal calendar".',
       parameters: {
         type: 'object',
         properties: {
           calendarId: {
             type: 'string',
-            description: 'Calendar ID to query',
+            description:
+              'CRITICAL: DO NOT include this parameter for general queries like "How does my day look?" or "Do I have meetings?". Only include when user explicitly mentions a specific calendar (e.g., "work", "personal").',
           },
           timeMin: {
             type: 'string',
@@ -239,6 +241,38 @@ export const calendarTools: ChatCompletionTool[] = [
           },
         },
         required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'getAvailability',
+      description:
+        'Check availability of time slots across one or more calendars using the Google Calendar freeBusy API. Use this before creating or rescheduling meetings to ensure the time slot is available.',
+      parameters: {
+        type: 'object',
+        properties: {
+          timeMin: {
+            type: 'string',
+            description: 'Start time in ISO format to check availability for',
+          },
+          timeMax: {
+            type: 'string',
+            description: 'End time in ISO format to check availability for',
+          },
+          calendarIds: {
+            type: 'array',
+            description:
+              'Array of calendar IDs to check (defaults to primary calendar)',
+            items: {
+              type: 'string',
+              description: 'Calendar ID to check availability for',
+            },
+            default: ['primary'],
+          },
+        },
+        required: ['timeMin', 'timeMax'],
       },
     },
   },

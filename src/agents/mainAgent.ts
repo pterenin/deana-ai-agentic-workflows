@@ -683,9 +683,33 @@ export async function runMainAgent(
             );
           }
           if (functionHandlers[functionName as keyof typeof functionHandlers]) {
-            const result = await functionHandlers[
-              functionName as keyof typeof functionHandlers
-            ](functionArgs, creds, onProgress);
+            // Pass context to calendar handlers and other functions that support it
+            const contextSupportedFunctions = [
+              'getEvents',
+              'createEvent',
+              'createEventWithContacts',
+              'updateEvent',
+              'deleteEvent',
+              'deleteMultipleEvents',
+              'createEventAtAlternative',
+              'rescheduleEvent',
+              'proposeRescheduleOptions',
+              'checkTimeSlotAvailability',
+            ];
+            const supportsContext =
+              contextSupportedFunctions.includes(functionName);
+
+            const result = supportsContext
+              ? await (
+                  functionHandlers[
+                    functionName as keyof typeof functionHandlers
+                  ] as any
+                )(functionArgs, creds, onProgress, context)
+              : await (
+                  functionHandlers[
+                    functionName as keyof typeof functionHandlers
+                  ] as any
+                )(functionArgs, creds, onProgress);
             toolResults.push({
               tool_call_id: toolCall.id,
               role: 'tool' as const,

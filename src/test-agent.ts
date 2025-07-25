@@ -17,6 +17,7 @@ async function testAgent() {
     const result = await runMainAgent(
       'What meetings do I have tomorrow?',
       mockCreds,
+      'primary',
       { history: [] }
     );
 

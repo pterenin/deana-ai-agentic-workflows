@@ -6,6 +6,8 @@ import {
   BookingAgentContext,
 } from './agents/modern/modernBookingAgent';
 
+import { AccountInfo, SessionContext } from './agents/types';
+
 // Helper function to remove timezone abbreviations from responses
 function removeTimezoneAbbreviations(content: string): string {
   if (!content) return content;
@@ -16,8 +18,8 @@ function removeTimezoneAbbreviations(content: string): string {
     .replace(
       /\s*\((PDT|PST|UTC|EST|EDT|CST|CDT|MST|MDT|GMT|BST|CET|JST|IST)\)/g,
       ''
-    ) // Remove specific timezone abbreviations in parentheses
-    .replace(/\s*\([A-Z]{3,4}\)/g, ''); // Remove other 3-4 letter abbreviations in parentheses (but not AM/PM)
+    )
+    .replace(/\s*\([A-Z]{3,4}\)/g, '');
 }
 
 const app = express();
@@ -27,17 +29,48 @@ const PORT = process.env.PORT || 3060;
 app.use(cors());
 app.use(express.json());
 
-// In-memory conversation context
-const conversationContexts = new Map<string, any>();
+// In-memory conversation context with enhanced session data
+const conversationContexts = new Map<string, SessionContext>();
+
+// Helper function to get account by title or default to primary
+function getAccountByTitle(
+  accounts: { primary: AccountInfo; secondary: AccountInfo | null },
+  title?: string
+): AccountInfo {
+  if (!title) return accounts.primary;
+
+  const titleLower = title.toLowerCase();
+  const primaryTitle = accounts.primary.title.toLowerCase();
+  const secondaryTitle = accounts.secondary?.title.toLowerCase();
+
+  // Check if user specified primary account by title
+  if (titleLower === primaryTitle || titleLower === 'primary') {
+    return accounts.primary;
+  }
+
+  // Check if user specified secondary account by title
+  if (
+    accounts.secondary &&
+    (titleLower === secondaryTitle || titleLower === 'secondary')
+  ) {
+    return accounts.secondary;
+  }
+
+  // Default to primary if no match
+  return accounts.primary;
+}
 
 // Enhanced main agent runner that uses modern booking for booking intents
 async function runEnhancedMainAgent(
   userMessage: string,
-  creds: any,
-  email: string,
-  context: any,
+  context: SessionContext,
   onProgress?: (update: any) => void
 ): Promise<any> {
+  // Get default account (primary) for backward compatibility
+  const defaultAccount = context.accounts?.primary;
+  const defaultCreds = defaultAccount?.creds;
+  const defaultEmail = defaultAccount?.email;
+
   // Detect booking intent
   const bookingIntent =
     /book.*(appointment|hair|barber|cut|massage|nail|doctor|dentist)/i.test(
@@ -60,8 +93,12 @@ async function runEnhancedMainAgent(
       lastConflict: context.lastBookingConflict,
     };
 
-    // Use modern booking agent
-    const modernBookingAgent = new ModernBookingAgent(creds, email, onProgress);
+    // Use modern booking agent with default credentials
+    const modernBookingAgent = new ModernBookingAgent(
+      defaultCreds,
+      defaultEmail,
+      onProgress
+    );
     const result = await modernBookingAgent.processBookingRequest(
       userMessage,
       bookingContext
@@ -82,16 +119,34 @@ async function runEnhancedMainAgent(
     };
   } else {
     // Use original main agent for non-booking requests
-    return await runMainAgent(userMessage, creds, email, context, onProgress);
+    return await runMainAgent(
+      userMessage,
+      defaultCreds,
+      defaultEmail,
+      context,
+      onProgress
+    );
   }
 }
 
 // Streaming endpoint for multi-step agent responses
 app.post('/api/chat/stream', async (req, res) => {
-  const { message, sessionId = 'default', creds, email } = req.body;
+  const {
+    message,
+    sessionId = 'default',
+    email,
+    primary_account,
+    secondary_account,
+  } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
+  }
+
+  if (!primary_account || !primary_account.email || !primary_account.creds) {
+    return res.status(400).json({
+      error: 'Primary account with email and credentials is required',
+    });
   }
 
   // Set headers for Server-Sent Events
@@ -105,11 +160,20 @@ app.post('/api/chat/stream', async (req, res) => {
 
   try {
     // Get or create conversation context
-    let context = conversationContexts.get(sessionId);
-    if (!context) {
-      context = { history: [] };
-      conversationContexts.set(sessionId, context);
-    }
+    let context: SessionContext = conversationContexts.get(sessionId) || {
+      sessionId,
+      history: [],
+    };
+
+    // Update context with account information
+    context.accounts = {
+      primary: primary_account,
+      secondary: secondary_account || null,
+    };
+    context.userEmail = email;
+    context.sessionId = sessionId;
+
+    conversationContexts.set(sessionId, context);
 
     // Add current message to context
     context.history.push({ role: 'user', content: message });
@@ -117,6 +181,15 @@ app.post('/api/chat/stream', async (req, res) => {
     console.log(
       `[Streaming Server] Processing message for session ${sessionId}:`,
       message
+    );
+    console.log(
+      `[Streaming Server] Accounts: Primary (${primary_account.title}: ${
+        primary_account.email
+      })${
+        secondary_account
+          ? `, Secondary (${secondary_account.title}: ${secondary_account.email})`
+          : ''
+      }`
     );
 
     // Send initial "thinking" message
@@ -129,24 +202,18 @@ app.post('/api/chat/stream', async (req, res) => {
     );
 
     // Run the enhanced agent with progress updates
-    const result = await runEnhancedMainAgent(
-      message,
-      creds,
-      email,
-      context,
-      (update) => {
-        // Send progress update to client
-        console.log('🔍 [Streaming Server] Progress update:', update);
-        res.write(
-          `data: ${JSON.stringify({
-            type: update.type,
-            content: update.content,
-            data: update.data,
-            timestamp: new Date().toISOString(),
-          })}\n\n`
-        );
-      }
-    );
+    const result = await runEnhancedMainAgent(message, context, (update) => {
+      // Send progress update to client
+      console.log('🔍 [Streaming Server] Progress update:', update);
+      res.write(
+        `data: ${JSON.stringify({
+          type: update.type,
+          content: update.content,
+          data: update.data,
+          timestamp: new Date().toISOString(),
+        })}\n\n`
+      );
+    });
 
     // Send the main response (with timezone removal)
     const cleanedContent = removeTimezoneAbbreviations(
@@ -155,7 +222,7 @@ app.post('/api/chat/stream', async (req, res) => {
     res.write(
       `data: ${JSON.stringify({
         type: 'response',
-        content: cleanedContent, // Apply timezone removal
+        content: cleanedContent,
         alternatives: result.alternatives,
         conflict: result.conflict,
         timestamp: new Date().toISOString(),
@@ -194,63 +261,106 @@ app.post('/api/chat/stream', async (req, res) => {
 
 // Regular endpoint for backward compatibility
 app.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', creds, email } = req.body;
+  const {
+    message,
+    sessionId = 'default',
+    email,
+    primary_account,
+    secondary_account,
+  } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
   }
 
+  if (!primary_account || !primary_account.email || !primary_account.creds) {
+    return res.status(400).json({
+      error: 'Primary account with email and credentials is required',
+    });
+  }
+
   try {
     // Get or create conversation context
-    let context = conversationContexts.get(sessionId);
-    if (!context) {
-      context = { history: [] };
-      conversationContexts.set(sessionId, context);
-    }
+    let context: SessionContext = conversationContexts.get(sessionId) || {
+      sessionId,
+      history: [],
+    };
+
+    // Update context with account information
+    context.accounts = {
+      primary: primary_account,
+      secondary: secondary_account || null,
+    };
+    context.userEmail = email;
+    context.sessionId = sessionId;
+
+    conversationContexts.set(sessionId, context);
+
+    // Add current message to context
+    context.history.push({ role: 'user', content: message });
 
     console.log(
-      `[Streaming Server] Processing message for session ${sessionId}:`,
+      `[Server] Processing message for session ${sessionId}:`,
       message
     );
-
-    // Use enhanced main agent
-    const result = await runEnhancedMainAgent(message, creds, email, context);
-
-    // Update conversation history
-    context.history.push(
-      { role: 'user', content: message },
-      { role: 'assistant', content: result.response || result.content }
+    console.log(
+      `[Server] Accounts: Primary (${primary_account.title}: ${
+        primary_account.email
+      })${
+        secondary_account
+          ? `, Secondary (${secondary_account.title}: ${secondary_account.email})`
+          : ''
+      }`
     );
 
-    res.json({
+    // Run the enhanced agent
+    const result = await runEnhancedMainAgent(message, context);
+
+    // Add agent response to context
+    context.history.push({
+      role: 'assistant',
       content: result.response || result.content,
-      alternatives: result.alternatives || [],
-      conflict: result.conflict || false,
+    });
+
+    console.log(`[Server] Agent result:`, result);
+
+    res.json({
+      success: true,
+      message: result.response || result.content,
       sessionId,
-      usage: result.usage,
+      context: context,
     });
   } catch (error) {
-    console.error('[Streaming Server] Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('[Server] Error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error',
+    });
   }
 });
 
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Get conversation history
+app.get('/api/conversation/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const context = conversationContexts.get(sessionId);
+
+  if (!context) {
+    return res.status(404).json({ error: 'Conversation not found' });
+  }
+
   res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    agent: 'enhanced-streaming-server-with-modern-booking',
+    sessionId,
+    context: context,
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Enhanced Streaming Server running on port ${PORT}`);
-  console.log(`📡 SSE endpoint: http://localhost:${PORT}/api/chat/stream`);
-  console.log(`📡 Regular endpoint: http://localhost:${PORT}/api/chat`);
-  console.log(`🎯 Enhanced with Modern Booking Agent Integration`);
-  console.log(
-    `✅ Workflow: Booking Intent → Modern Agent → Voice Call → Calendar Event`
-  );
-  console.log(`🔧 Non-booking requests use original main agent`);
+  console.log(`🚀 Streaming Agents Server running on port ${PORT}`);
+  console.log(`📡 Stream endpoint: http://localhost:${PORT}/api/chat/stream`);
+  console.log(`📡 Chat endpoint: http://localhost:${PORT}/api/chat`);
 });

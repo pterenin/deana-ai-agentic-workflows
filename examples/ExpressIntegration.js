@@ -19,11 +19,43 @@ app.get('/', (req, res) => {
 
 // Proxy endpoint to the streaming agent server
 app.post('/api/chat/stream', async (req, res) => {
-  const { message, sessionId = 'default', creds } = req.body;
+  const {
+    message,
+    sessionId = 'default',
+    email,
+    primary_account,
+    secondary_account,
+  } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
   }
+
+  if (!primary_account || !primary_account.email || !primary_account.creds) {
+    return res
+      .status(400)
+      .json({
+        error: 'Primary account with email and credentials is required',
+      });
+  }
+
+  // Store account information in session
+  let session = sessions.get(sessionId);
+  if (!session) {
+    session = {
+      id: sessionId,
+      createdAt: new Date(),
+      messages: [],
+    };
+    sessions.set(sessionId, session);
+  }
+
+  // Update session with current account information
+  session.accounts = {
+    primary: primary_account,
+    secondary: secondary_account || null,
+  };
+  session.userEmail = email;
 
   // Set headers for Server-Sent Events
   res.writeHead(200, {
@@ -35,7 +67,7 @@ app.post('/api/chat/stream', async (req, res) => {
   });
 
   try {
-    // Forward the request to the agent server
+    // Forward the request to the agent server with the new structure
     const agentResponse = await fetch('http://localhost:3060/api/chat/stream', {
       method: 'POST',
       headers: {
@@ -44,7 +76,9 @@ app.post('/api/chat/stream', async (req, res) => {
       body: JSON.stringify({
         message,
         sessionId,
-        creds: creds || {}, // Add your OAuth credentials here
+        email,
+        primary_account,
+        secondary_account: secondary_account || null,
       }),
     });
 
@@ -99,11 +133,43 @@ app.post('/api/chat/stream', async (req, res) => {
 
 // Regular chat endpoint (non-streaming)
 app.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', creds } = req.body;
+  const {
+    message,
+    sessionId = 'default',
+    email,
+    primary_account,
+    secondary_account,
+  } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
   }
+
+  if (!primary_account || !primary_account.email || !primary_account.creds) {
+    return res
+      .status(400)
+      .json({
+        error: 'Primary account with email and credentials is required',
+      });
+  }
+
+  // Store account information in session
+  let session = sessions.get(sessionId);
+  if (!session) {
+    session = {
+      id: sessionId,
+      createdAt: new Date(),
+      messages: [],
+    };
+    sessions.set(sessionId, session);
+  }
+
+  // Update session with current account information
+  session.accounts = {
+    primary: primary_account,
+    secondary: secondary_account || null,
+  };
+  session.userEmail = email;
 
   try {
     const response = await fetch('http://localhost:3060/api/chat', {
@@ -114,7 +180,9 @@ app.post('/api/chat', async (req, res) => {
       body: JSON.stringify({
         message,
         sessionId,
-        creds: creds || {},
+        email,
+        primary_account,
+        secondary_account: secondary_account || null,
       }),
     });
 
@@ -135,6 +203,8 @@ app.post('/api/sessions', (req, res) => {
     id: sessionId,
     createdAt: new Date(),
     messages: [],
+    accounts: null,
+    userEmail: null,
   });
   res.json({ sessionId });
 });

@@ -75,7 +75,11 @@ app.get('/api/chat/stream', async (req, res) => {
 
   try {
     // Create modern booking agent
-    const bookingAgent = new ModernBookingAgent(mockCredentials, onProgress);
+    const bookingAgent = new ModernBookingAgent(
+      mockCredentials,
+      'primary',
+      onProgress
+    );
 
     // Process the booking request
     const result = await bookingAgent.processBookingRequest(message, context);
