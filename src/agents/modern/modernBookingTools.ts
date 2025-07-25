@@ -139,12 +139,20 @@ export class ModernBookingToolExecutor {
       }
 
       // Success - the booking agent has completed the full workflow
+      let successMessage =
+        'Appointment successfully booked via voice call and added to calendar';
+
+      // Include time change notification if present
+      if (result.timeChangeNotification) {
+        successMessage += result.timeChangeNotification;
+      }
+
       return {
         success: true,
-        message:
-          'Appointment successfully booked via voice call and added to calendar',
+        message: successMessage,
         transcript: result.transcript,
         appointment: result.appointment,
+        timeChanged: !!result.timeChangeNotification, // Flag for AI to acknowledge
       };
     } catch (error: any) {
       return {

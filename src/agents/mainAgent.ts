@@ -695,6 +695,12 @@ export async function runMainAgent(
               'rescheduleEvent',
               'proposeRescheduleOptions',
               'checkTimeSlotAvailability',
+              'askWhichEmailAccount',
+              'sendEmailWithAccount',
+              'findContactInAccount',
+              'parseCallSummaryForBooking',
+              'createEventFromCallBooking',
+              'getRecentCallSummary',
             ];
             const supportsContext =
               contextSupportedFunctions.includes(functionName);

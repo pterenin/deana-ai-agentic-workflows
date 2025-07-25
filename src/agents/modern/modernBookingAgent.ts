@@ -163,6 +163,11 @@ export class ModernBookingAgent {
 - If conflicts arise, clearly present alternatives
 - Confirm successful bookings with appointment details
 
+**TIME CHANGE NOTIFICATIONS:**
+- If the booking tool returns a message about time adjustments, acknowledge it clearly
+- Always emphasize the FINAL confirmed time to avoid confusion
+- Example: "Your appointment has been successfully booked for today at 8 PM with Thomas. Please note that the appointment time was adjusted from your original request of 6:00 PM to 8:00 PM based on availability confirmed during the call."
+
 Current date: ${currentDate}`;
 
     if (context.lastConflict) {
