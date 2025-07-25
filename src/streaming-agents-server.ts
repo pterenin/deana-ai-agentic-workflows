@@ -5,6 +5,7 @@ import {
   ModernBookingAgent,
   BookingAgentContext,
 } from './agents/modern/modernBookingAgent';
+import { storeSessionCredentials } from './utils/sessionCredentialStore';
 
 // Helper function to remove timezone abbreviations from responses
 function removeTimezoneAbbreviations(content: string): string {
@@ -36,7 +37,9 @@ async function runEnhancedMainAgent(
   creds: any,
   email: string,
   context: any,
-  onProgress?: (update: any) => void
+  onProgress?: (update: any) => void,
+  primaryAccount?: any,
+  secondaryAccount?: any
 ): Promise<any> {
   // Detect booking intent
   const bookingIntent =
@@ -82,13 +85,28 @@ async function runEnhancedMainAgent(
     };
   } else {
     // Use original main agent for non-booking requests
-    return await runMainAgent(userMessage, creds, email, context, onProgress);
+    return await runMainAgent(
+      userMessage,
+      creds,
+      email,
+      context,
+      onProgress,
+      primaryAccount,
+      secondaryAccount
+    );
   }
 }
 
 // Streaming endpoint for multi-step agent responses
 app.post('/api/chat/stream', async (req, res) => {
-  const { message, sessionId = 'default', creds, email } = req.body;
+  const {
+    message,
+    sessionId = 'default',
+    creds,
+    email,
+    primary_account,
+    secondary_account,
+  } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
@@ -107,8 +125,16 @@ app.post('/api/chat/stream', async (req, res) => {
     // Get or create conversation context
     let context = conversationContexts.get(sessionId);
     if (!context) {
-      context = { history: [] };
+      context = { history: [], sessionId };
       conversationContexts.set(sessionId, context);
+    }
+
+    // Ensure sessionId is always in context
+    context.sessionId = sessionId;
+
+    // Store session credentials for easy access by functions
+    if (primary_account || secondary_account) {
+      storeSessionCredentials(sessionId, primary_account, secondary_account);
     }
 
     // Add current message to context
@@ -128,11 +154,19 @@ app.post('/api/chat/stream', async (req, res) => {
       })}\n\n`
     );
 
+    // Extract credentials from primary account
+    const effectiveCreds = primary_account?.creds ||
+      creds || {
+        access_token: 'valid',
+        refresh_token: 'valid',
+        expires_at: '2025-12-31',
+      };
+
     // Run the enhanced agent with progress updates
     const result = await runEnhancedMainAgent(
       message,
-      creds,
-      email,
+      effectiveCreds,
+      email || primary_account?.email,
       context,
       (update) => {
         // Send progress update to client
@@ -145,7 +179,9 @@ app.post('/api/chat/stream', async (req, res) => {
             timestamp: new Date().toISOString(),
           })}\n\n`
         );
-      }
+      },
+      primary_account,
+      secondary_account
     );
 
     // Send the main response (with timezone removal)
@@ -166,6 +202,26 @@ app.post('/api/chat/stream', async (req, res) => {
     context.history.push({
       role: 'assistant',
       content: cleanedContent,
+    });
+
+    // Preserve conflict-related context data
+    if (result.awaitingReschedulingDecision) {
+      context.awaitingReschedulingDecision =
+        result.awaitingReschedulingDecision;
+      context.pendingReschedulingProposals =
+        result.pendingReschedulingProposals;
+      console.log('✅ [Streaming Server] Preserved rescheduling context:', {
+        sessionId,
+        proposalsCount: result.pendingReschedulingProposals?.length || 0,
+      });
+    }
+
+    // Debug: Show current context state
+    console.log('🔍 [Streaming Server] Current context state:', {
+      sessionId,
+      historyLength: context.history?.length || 0,
+      hasReschedulingDecision: !!context.awaitingReschedulingDecision,
+      hasPendingProposals: !!context.pendingReschedulingProposals,
     });
 
     // Send completion signal
@@ -194,7 +250,14 @@ app.post('/api/chat/stream', async (req, res) => {
 
 // Regular endpoint for backward compatibility
 app.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', creds, email } = req.body;
+  const {
+    message,
+    sessionId = 'default',
+    creds,
+    email,
+    primary_account,
+    secondary_account,
+  } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
@@ -214,7 +277,15 @@ app.post('/api/chat', async (req, res) => {
     );
 
     // Use enhanced main agent
-    const result = await runEnhancedMainAgent(message, creds, email, context);
+    const result = await runEnhancedMainAgent(
+      message,
+      creds,
+      email,
+      context,
+      undefined,
+      primary_account,
+      secondary_account
+    );
 
     // Update conversation history
     context.history.push(

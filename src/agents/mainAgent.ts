@@ -273,8 +273,24 @@ export async function runMainAgent(
   creds: any,
   email?: string,
   context?: any,
-  onProgress?: (update: { type: string; content: string; data?: any }) => void
+  onProgress?: (update: { type: string; content: string; data?: any }) => void,
+  primaryAccount?: any,
+  secondaryAccount?: any
 ): Promise<any> {
+  // Enhance context with account information for calendar ID resolution
+  if (context && (primaryAccount || secondaryAccount)) {
+    context.primaryAccount = primaryAccount;
+    context.secondaryAccount = secondaryAccount;
+    console.log(
+      '🔧 [runMainAgent] Enhanced context with account information:',
+      {
+        primaryTitle: primaryAccount?.title,
+        primaryEmail: primaryAccount?.email,
+        secondaryTitle: secondaryAccount?.title,
+        secondaryEmail: secondaryAccount?.email,
+      }
+    );
+  }
   // Booking intent detection (simple)
   const bookingIntent =
     /book.*(appointment|hair|barber|cut|massage|nail|doctor|dentist)/i.test(
@@ -683,9 +699,184 @@ export async function runMainAgent(
             );
           }
           if (functionHandlers[functionName as keyof typeof functionHandlers]) {
-            const result = await functionHandlers[
-              functionName as keyof typeof functionHandlers
-            ](functionArgs, creds, onProgress);
+            let result;
+
+            // Special handling for dual account tools
+            if (functionName === 'getDualAccountEvents') {
+              result = await (functionHandlers as any).getDualAccountEvents(
+                functionArgs,
+                creds,
+                onProgress,
+                primaryAccount,
+                secondaryAccount
+              );
+            } else if (functionName === 'getSpecificCalendarEvents') {
+              result = await (
+                functionHandlers as any
+              ).getSpecificCalendarEvents(
+                functionArgs,
+                creds,
+                onProgress,
+                primaryAccount,
+                secondaryAccount
+              );
+            } else if (functionName === 'showReschedulingOptions') {
+              // Validate that we're not passing fake event data
+              const conflictedEvent = functionArgs.conflictedEvent;
+              if (conflictedEvent) {
+                const eventId = conflictedEvent.id;
+                const calendarId = conflictedEvent.calendarId;
+
+                console.log(
+                  '🔍 [mainAgent] showReschedulingOptions validation:',
+                  {
+                    eventId,
+                    calendarId,
+                    eventSummary: conflictedEvent.summary,
+                    hasFakeEventId:
+                      eventId &&
+                      (eventId.includes('blue-event') ||
+                        eventId.includes('red-event') ||
+                        eventId.includes('office_meeting') ||
+                        eventId.length < 10),
+                    hasFakeCalendarId:
+                      calendarId &&
+                      (calendarId.includes('blue-calendar') ||
+                        calendarId.includes('red-calendar') ||
+                        calendarId === 'blue' ||
+                        calendarId === 'red'),
+                  }
+                );
+
+                // Log warning if fake data detected - but recovery system will handle it
+                if (
+                  eventId &&
+                  (eventId.includes('blue-event') ||
+                    eventId.includes('red-event') ||
+                    eventId.includes('office_meeting') ||
+                    eventId.length < 10)
+                ) {
+                  console.warn(
+                    '⚠️ [mainAgent] FAKE EVENT ID DETECTED in showReschedulingOptions (recovery will attempt):',
+                    eventId,
+                    'Summary:',
+                    conflictedEvent.summary
+                  );
+                }
+                if (
+                  calendarId &&
+                  (calendarId.includes('blue-calendar') ||
+                    calendarId.includes('red-calendar') ||
+                    calendarId === 'blue' ||
+                    calendarId === 'red')
+                ) {
+                  console.warn(
+                    '⚠️ [mainAgent] FAKE CALENDAR ID DETECTED in showReschedulingOptions (recovery will attempt):',
+                    calendarId,
+                    'Summary:',
+                    conflictedEvent.summary
+                  );
+                }
+              }
+
+              result = await (functionHandlers as any).showReschedulingOptions(
+                functionArgs,
+                creds,
+                onProgress,
+                context
+              );
+            } else if (functionName === 'rescheduleEvent') {
+              result = await (functionHandlers as any).rescheduleEvent(
+                functionArgs,
+                creds,
+                onProgress,
+                context
+              );
+            } else if (functionName === 'selectTimeSlot') {
+              // Validate that we're not passing fake event data
+              const conflictedEvent = functionArgs.conflictedEvent;
+              if (conflictedEvent) {
+                const eventId = conflictedEvent.id;
+                const calendarId = conflictedEvent.calendarId;
+
+                console.log('🔍 [mainAgent] selectTimeSlot validation:', {
+                  eventId,
+                  calendarId,
+                  eventSummary: conflictedEvent.summary,
+                  selectedTime: functionArgs.selectedSlot?.timeDisplay,
+                  hasFakeEventId:
+                    eventId &&
+                    (eventId.includes('blue-event') ||
+                      eventId.includes('red-event') ||
+                      eventId.includes('office_meeting') ||
+                      eventId.length < 10),
+                  hasFakeCalendarId:
+                    calendarId &&
+                    (calendarId.includes('blue-calendar') ||
+                      calendarId.includes('red-calendar') ||
+                      calendarId === 'blue' ||
+                      calendarId === 'red'),
+                });
+
+                // Log warning if fake data detected - but recovery system will handle it
+                if (
+                  eventId &&
+                  (eventId.includes('blue-event') ||
+                    eventId.includes('red-event') ||
+                    eventId.includes('office_meeting') ||
+                    eventId.length < 10)
+                ) {
+                  console.warn(
+                    '⚠️ [mainAgent] FAKE EVENT ID DETECTED in selectTimeSlot (recovery will attempt):',
+                    eventId,
+                    'Summary:',
+                    conflictedEvent.summary
+                  );
+                }
+                if (
+                  calendarId &&
+                  (calendarId.includes('blue-calendar') ||
+                    calendarId.includes('red-calendar') ||
+                    calendarId === 'blue' ||
+                    calendarId === 'red')
+                ) {
+                  console.warn(
+                    '⚠️ [mainAgent] FAKE CALENDAR ID DETECTED in selectTimeSlot (recovery will attempt):',
+                    calendarId,
+                    'Summary:',
+                    conflictedEvent.summary
+                  );
+                }
+              }
+
+              result = await (functionHandlers as any).selectTimeSlot(
+                functionArgs,
+                creds,
+                onProgress,
+                context
+              );
+            } else if (functionName === 'createEvent') {
+              result = await (functionHandlers as any).createEvent(
+                functionArgs,
+                creds,
+                onProgress,
+                context
+              );
+            } else if (functionName === 'createEventWithAvailabilityCheck') {
+              result = await (
+                functionHandlers as any
+              ).createEventWithAvailabilityCheck(
+                functionArgs,
+                creds,
+                onProgress,
+                context
+              );
+            } else {
+              result = await functionHandlers[
+                functionName as keyof typeof functionHandlers
+              ](functionArgs, creds, onProgress);
+            }
+
             toolResults.push({
               tool_call_id: toolCall.id,
               role: 'tool' as const,

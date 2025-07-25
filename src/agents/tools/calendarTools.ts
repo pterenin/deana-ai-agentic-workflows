@@ -29,6 +29,55 @@ export const calendarTools: ChatCompletionTool[] = [
   {
     type: 'function' as const,
     function: {
+      name: 'getDualAccountEvents',
+      description:
+        'Get events from both primary and secondary calendars for a specific time range. Use this when the user asks about meetings without specifying which calendar (e.g., "Do I have meetings today?", "What\'s on my schedule?")',
+      parameters: {
+        type: 'object',
+        properties: {
+          timeMin: {
+            type: 'string',
+            description: 'Start time in ISO format',
+          },
+          timeMax: {
+            type: 'string',
+            description: 'End time in ISO format',
+          },
+        },
+        required: ['timeMin', 'timeMax'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'getSpecificCalendarEvents',
+      description:
+        'Get events from a specific calendar when the user mentions a calendar title (e.g., "Do I have meetings in my work calendar?", "What\'s on my personal calendar?"). Use this when the user specifies which calendar they want to check.',
+      parameters: {
+        type: 'object',
+        properties: {
+          timeMin: {
+            type: 'string',
+            description: 'Start time in ISO format',
+          },
+          timeMax: {
+            type: 'string',
+            description: 'End time in ISO format',
+          },
+          requestedCalendar: {
+            type: 'string',
+            description:
+              'The calendar title or identifier mentioned by the user (e.g., "work", "personal", "home", etc.)',
+          },
+        },
+        required: ['timeMin', 'timeMax', 'requestedCalendar'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'createEventWithContacts',
       description:
         'Create a calendar event and automatically invite contacts by name. Use this for meetings with specific people (e.g., "meeting with John", "lunch with Mike and Sarah"). This will look up contact emails and add them as attendees so the event appears in their calendars.',
@@ -239,6 +288,101 @@ export const calendarTools: ChatCompletionTool[] = [
           },
         },
         required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'getAvailability',
+      description:
+        'Check availability (free/busy) for specific calendars in a time range using Google Calendar FreeBusy API. More efficient than getEvents for pure availability checking.',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            description: 'List of calendars to check availability for',
+            items: {
+              type: 'object',
+              properties: {
+                id: {
+                  type: 'string',
+                  description:
+                    'Calendar ID to check (e.g., email address or "primary")',
+                },
+              },
+              required: ['id'],
+            },
+          },
+          timeMin: {
+            type: 'string',
+            description: 'Start time of the interval in ISO format (RFC3339)',
+          },
+          timeMax: {
+            type: 'string',
+            description: 'End time of the interval in ISO format (RFC3339)',
+          },
+          timeZone: {
+            type: 'string',
+            description: 'Time zone for the response (default: UTC)',
+            default: 'UTC',
+          },
+        },
+        required: ['items', 'timeMin', 'timeMax'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'createEventWithAvailabilityCheck',
+      description:
+        'Create an event after first checking availability using getAvailability. If the time is not available, proposes alternative time slots.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: 'Event title/summary',
+          },
+          start: {
+            type: 'string',
+            description: 'Start time in ISO format',
+          },
+          end: {
+            type: 'string',
+            description: 'End time in ISO format',
+          },
+          calendarId: {
+            type: 'string',
+            description: 'Calendar ID to create event in (defaults to primary)',
+            default: 'primary',
+          },
+          timeZone: {
+            type: 'string',
+            description: 'Timezone for the event',
+            default: 'America/Los_Angeles',
+          },
+          attendees: {
+            type: 'array',
+            description: 'List of attendee email addresses',
+            items: {
+              type: 'string',
+              description: 'Email address of attendee',
+            },
+          },
+          calendarsToCheck: {
+            type: 'array',
+            description:
+              'List of calendar IDs to check for conflicts (defaults to just the target calendar)',
+            items: {
+              type: 'string',
+              description: 'Calendar ID to check for conflicts',
+            },
+          },
+        },
+        required: ['summary', 'start', 'end'],
       },
     },
   },

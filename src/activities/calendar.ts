@@ -1,4 +1,8 @@
 import { google } from 'googleapis';
+import {
+  getCredentialsForCalendar,
+  getSessionStoreStats,
+} from '../utils/sessionCredentialStore';
 import 'dotenv/config';
 
 function makeOauthClient(creds: {
@@ -103,49 +107,102 @@ export async function getEvents(
     if (isTestCredentials) {
       // Return sample events for testing - events for "today"
       const today = new Date();
-      const todayStart = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-        9,
-        0
-      ); // 9 AM today
-      const todayEnd = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-        10,
-        0
-      ); // 10 AM today
-      const todayStart2 = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-        14,
-        0
-      ); // 2 PM today
-      const todayEnd2 = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-        15,
-        0
-      ); // 3 PM today
 
-      const mockData = [
-        {
-          id: 'mock-meeting-1',
-          summary: 'Team Standup',
-          start: { dateTime: todayStart.toISOString() },
-          end: { dateTime: todayEnd.toISOString() },
-        },
-        {
-          id: 'mock-meeting-2',
-          summary: 'Client Review',
-          start: { dateTime: todayStart2.toISOString() },
-          end: { dateTime: todayEnd2.toISOString() },
-        },
-      ];
+      // Create different events for primary vs secondary to test conflicts
+      let mockData;
+
+      if (calendarId.includes('primary') || calendarId === 'test@example.com') {
+        // Primary calendar events (Red calendar)
+        const event1Start = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          15,
+          15
+        ); // 3:15 PM
+        const event1End = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          16,
+          15
+        ); // 4:15 PM
+        const event2Start = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          18,
+          30
+        ); // 6:30 PM
+        const event2End = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          19,
+          30
+        ); // 7:30 PM
+
+        mockData = [
+          {
+            id: 'primary-personal-meeting-123abc',
+            summary: 'Personal Meeting',
+            start: { dateTime: event1Start.toISOString() },
+            end: { dateTime: event1End.toISOString() },
+          },
+          {
+            id: 'primary-taken-meeting-456def',
+            summary: 'Taken',
+            start: { dateTime: event2Start.toISOString() },
+            end: { dateTime: event2End.toISOString() },
+          },
+        ];
+      } else {
+        // Secondary calendar events (Blue calendar - with conflicts)
+        const event1Start = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          15,
+          0
+        ); // 3:00 PM (overlaps with primary 3:15-4:15 PM)
+        const event1End = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          16,
+          0
+        ); // 4:00 PM
+        const event2Start = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          18,
+          30
+        ); // 6:30 PM
+        const event2End = new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate(),
+          19,
+          30
+        ); // 7:30 PM
+
+        mockData = [
+          {
+            id: 'secondary-office-meeting-789ghi',
+            summary: 'Office Meeting',
+            start: { dateTime: event1Start.toISOString() },
+            end: { dateTime: event1End.toISOString() },
+          },
+          {
+            id: 'secondary-taken-meeting-012jkl',
+            summary: 'Taken',
+            start: { dateTime: event2Start.toISOString() },
+            end: { dateTime: event2End.toISOString() },
+          },
+        ];
+      }
+
       console.log(
         '🎯 [getEvents] Returning test mock data for user:',
         calendarId,
@@ -206,6 +263,8 @@ export async function createEvent(
       '[createEvent] Creating event with:',
       JSON.stringify(eventWithAttendees, null, 2)
     );
+    console.log('🔄 [createEvent] Calendar ID:', calendarId);
+    console.log('🔄 [createEvent] Creds:', creds);
     const response = await cal.events.insert({
       calendarId,
       requestBody: eventWithAttendees,
@@ -242,28 +301,118 @@ export async function updateEvent(
     end?: string;
     summary?: string;
     attendees?: string[];
-  }
+  },
+  sessionId?: string
 ) {
-  const auth = makeOauthClient(creds);
-  const cal = google.calendar({ version: 'v3', auth });
-  const eventPatch: any = {};
-  if (updates.start) {
-    eventPatch.start = { dateTime: updates.start };
-  }
-  if (updates.end) {
-    eventPatch.end = { dateTime: updates.end };
-  }
-  if (updates.summary) {
-    eventPatch.summary = updates.summary;
-  }
-  if (updates.attendees) {
-    eventPatch.attendees = updates.attendees.map((email) => ({ email }));
-  }
-  return cal.events.patch({
+  console.log('🔄 [updateEvent] Starting with params:', {
     calendarId,
     eventId,
-    requestBody: eventPatch,
+    updates,
+    credentialsType: creds?.access_token === 'valid' ? 'test' : 'real',
+    sessionId,
   });
+
+  // Validate credentials against session store if sessionId provided
+  if (sessionId && calendarId !== 'primary') {
+    console.log(
+      '🔍 [updateEvent] Validating credentials for calendar:',
+      calendarId
+    );
+
+    const expectedCreds = getCredentialsForCalendar(sessionId, calendarId);
+    if (expectedCreds) {
+      const isCorrectCreds =
+        expectedCreds.creds.access_token === creds.access_token;
+      console.log('🔍 [updateEvent] Credential validation:', {
+        calendarId,
+        expectedAccount: `${expectedCreds.accountInfo.title} (${expectedCreds.accountInfo.email})`,
+        isCorrectCreds,
+        providedTokenStart: creds.access_token?.substring(0, 20) + '...',
+        expectedTokenStart:
+          expectedCreds.creds.access_token?.substring(0, 20) + '...',
+      });
+
+      if (!isCorrectCreds) {
+        console.warn('⚠️ [updateEvent] CREDENTIAL MISMATCH WARNING!');
+        console.warn('   - Calendar:', calendarId);
+        console.warn(
+          '   - Expected account:',
+          expectedCreds.accountInfo.title,
+          `(${expectedCreds.accountInfo.email})`
+        );
+        console.warn(
+          '   - Using potentially wrong credentials - this may cause 404 errors'
+        );
+      } else {
+        console.log(
+          '✅ [updateEvent] Credential validation passed - using correct account credentials'
+        );
+      }
+    } else {
+      console.warn(
+        '⚠️ [updateEvent] No credentials found in session store for calendar:',
+        calendarId
+      );
+      console.warn(
+        '   - This may indicate the session store was not properly initialized'
+      );
+      console.warn(
+        '   - Or the calendar ID format may not match stored accounts'
+      );
+    }
+  } else {
+    console.log(
+      '🔍 [updateEvent] Skipping credential validation (no sessionId or using primary calendar)'
+    );
+  }
+
+  // Handle test credentials with mock response
+  if (creds?.access_token === 'valid') {
+    console.log('✅ [updateEvent] Using mock update for testing');
+    return {
+      data: {
+        id: eventId,
+        summary: updates.summary || 'Updated Event',
+        start: updates.start ? { dateTime: updates.start } : undefined,
+        end: updates.end ? { dateTime: updates.end } : undefined,
+        updated: new Date().toISOString(),
+      },
+    };
+  }
+
+  try {
+    const auth = makeOauthClient(creds);
+    const cal = google.calendar({ version: 'v3', auth });
+    const eventPatch: any = {};
+    if (updates.start) {
+      eventPatch.start = { dateTime: updates.start };
+    }
+    if (updates.end) {
+      eventPatch.end = { dateTime: updates.end };
+    }
+    if (updates.summary) {
+      eventPatch.summary = updates.summary;
+    }
+    if (updates.attendees) {
+      eventPatch.attendees = updates.attendees.map((email) => ({ email }));
+    }
+
+    console.log('🔄 [updateEvent] Making API call to update event', eventPatch);
+    console.log('🔄 [updateEvent] Calendar ID:', calendarId);
+    console.log('🔄 [updateEvent] Event ID:', eventId);
+    console.log('🔄 [updateEvent] creds:', creds);
+    const result = await cal.events.patch({
+      calendarId,
+      eventId,
+      requestBody: eventPatch,
+    });
+
+    console.log('✅ [updateEvent] Successfully updated event');
+    return result;
+  } catch (error) {
+    console.error('❌ [updateEvent] Error updating event:', error);
+    throw error;
+  }
 }
 
 export async function deleteEvent(
@@ -316,5 +465,133 @@ export async function deleteEvent(
     } else {
       throw new Error(`Failed to delete event "${eventId}": ${error.message}`);
     }
+  }
+}
+
+export async function getAvailability(
+  creds: any,
+  items: Array<{ id: string }>,
+  timeMin: string,
+  timeMax: string,
+  timeZone: string = 'UTC'
+): Promise<any> {
+  console.log('🔍 [getAvailability] Starting FreeBusy query with params:', {
+    items,
+    timeMin,
+    timeMax,
+    timeZone,
+    credsKeys: creds ? Object.keys(creds) : 'null',
+  });
+
+  try {
+    const auth = makeOauthClient(creds);
+    const cal = google.calendar({ version: 'v3', auth });
+
+    console.log('🔍 [getAvailability] Making FreeBusy API call...');
+
+    const requestBody = {
+      timeMin,
+      timeMax,
+      timeZone,
+      items,
+    };
+
+    const res = await cal.freebusy.query({
+      requestBody,
+    });
+
+    const result = res.data;
+    console.log('✅ [getAvailability] FreeBusy API call succeeded!');
+    console.log(
+      '🎯 [getAvailability] Result:',
+      JSON.stringify(result, null, 2)
+    );
+
+    // Process the result to make it easier to work with
+    const processedResult = {
+      timeMin,
+      timeMax,
+      timeZone,
+      calendars: {} as Record<
+        string,
+        { busy: Array<{ start: string; end: string }>; available: boolean }
+      >,
+    };
+
+    // Process each calendar's busy times
+    if (result.calendars) {
+      for (const [calendarId, calendarData] of Object.entries(
+        result.calendars
+      )) {
+        const busyTimes = (calendarData as any).busy || [];
+        processedResult.calendars[calendarId] = {
+          busy: busyTimes,
+          available: busyTimes.length === 0, // If no busy times, it's available
+        };
+      }
+    }
+
+    console.log('📊 [getAvailability] Processed result:', processedResult);
+    return processedResult;
+  } catch (err) {
+    console.error('❌ [getAvailability] Error occurred:', {
+      error: err,
+      message: err instanceof Error ? err.message : 'Unknown error',
+      code: (err as any)?.code,
+      status: (err as any)?.status,
+    });
+
+    // Return mock data for testing when using test credentials
+    const isTestCredentials = creds?.access_token === 'valid';
+    if (isTestCredentials) {
+      console.log(
+        '🔄 [getAvailability] Using test credentials, returning mock availability data...'
+      );
+
+      // Mock some busy times for testing
+      const mockResult = {
+        timeMin,
+        timeMax,
+        timeZone,
+        calendars: {} as Record<
+          string,
+          { busy: Array<{ start: string; end: string }>; available: boolean }
+        >,
+      };
+
+      // Add mock data for each requested calendar
+      items.forEach((item) => {
+        // Create some mock busy times for demo purposes
+        const requestedStart = new Date(timeMin);
+        const requestedEnd = new Date(timeMax);
+        const duration = requestedEnd.getTime() - requestedStart.getTime();
+
+        // If the requested time is during typical working hours, make it busy sometimes
+        const hour = requestedStart.getHours();
+        const isBusyTime = hour >= 9 && hour <= 17 && Math.random() > 0.5; // 50% chance of being busy during work hours
+
+        if (isBusyTime) {
+          mockResult.calendars[item.id] = {
+            busy: [
+              {
+                start: timeMin,
+                end: timeMax,
+              },
+            ],
+            available: false,
+          };
+        } else {
+          mockResult.calendars[item.id] = {
+            busy: [],
+            available: true,
+          };
+        }
+      });
+
+      console.log('🎯 [getAvailability] Mock result:', mockResult);
+      return mockResult;
+    }
+
+    throw err;
   }
 }
