@@ -46,7 +46,11 @@ async function runEnhancedMainAgent(
     };
 
     // Use modern booking agent
-    const modernBookingAgent = new ModernBookingAgent(creds, onProgress);
+    const modernBookingAgent = new ModernBookingAgent(
+      creds,
+      'primary',
+      onProgress
+    );
     const result = await modernBookingAgent.processBookingRequest(
       userMessage,
       bookingContext

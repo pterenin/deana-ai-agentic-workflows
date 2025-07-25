@@ -66,7 +66,12 @@ export const conflictHandlers = {
     };
   },
 
-  createEventAtAlternative: async (args: any, creds: any) => {
+  createEventAtAlternative: async (
+    args: any,
+    creds: any,
+    onProgress?: (update: any) => void,
+    context?: any
+  ) => {
     return await createEvent(creds, args.calendarId, {
       start: args.startISO,
       end: args.endISO,

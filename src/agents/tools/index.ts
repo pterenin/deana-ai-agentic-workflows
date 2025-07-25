@@ -2,11 +2,13 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 // Export all tools
 export { calendarTools } from './calendarTools';
 export { conflictTools } from './conflictTools';
+export { conflictResolutionTools } from './conflictResolutionTools';
 export { sendEmailHandler };
 
 // Combine all tools for the main agent
 import { calendarTools } from './calendarTools';
 import { conflictTools } from './conflictTools';
+import { conflictResolutionTools } from './conflictResolutionTools';
 import { sendEmail as sendEmailHandler } from '../handlers/sendEmailHandler';
 
 export const sendEmailTool: ChatCompletionTool = {
@@ -39,5 +41,6 @@ export const sendEmailTool: ChatCompletionTool = {
 export const allTools: ChatCompletionTool[] = [
   ...calendarTools,
   ...conflictTools,
+  ...conflictResolutionTools,
   sendEmailTool,
 ];
