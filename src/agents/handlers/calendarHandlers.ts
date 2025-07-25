@@ -79,19 +79,30 @@ function determineTargetAccount(
     return 'both';
   }
 
-  // For event searches without specific calendar mention, check both
+  // For event searches and schedule overviews without specific calendar mention, check both
   const isEventSearchQuery = userMessage
     .toLowerCase()
     .match(
       /(what time.*have|when.*have|when is|what time is|find.*meeting|find.*event|locate.*meeting)/
     );
+
+  const isScheduleOverviewQuery = userMessage
+    .toLowerCase()
+    .match(
+      /(how.*week|what.*week|my week|what.*schedule|my schedule|list.*meetings|meetings.*week|week.*looks|schedule.*looks|next.*weeks|this week)/
+    );
+
   const hasNoCalendarMention = !userMessage
     .toLowerCase()
     .match(/(work|personal|primary|secondary)/);
 
-  if (isEventSearchQuery && hasNoCalendarMention && accounts.secondary) {
+  if (
+    (isEventSearchQuery || isScheduleOverviewQuery) &&
+    hasNoCalendarMention &&
+    accounts.secondary
+  ) {
     console.log(
-      '🧠 [determineTargetAccount] Event search query without calendar specification - checking both calendars'
+      '🧠 [determineTargetAccount] Schedule/event query without calendar specification - checking both calendars'
     );
     return 'both';
   }

@@ -21,6 +21,8 @@ Use your natural language understanding to determine which calendar(s) to check:
 
 **When to check BOTH calendars (DO NOT include calendarId parameter):**
 - CRITICAL: For "How does my day look?", "Do I have meetings today?", "What's my schedule?" → Call getEvents(timeMin, timeMax) with NO calendarId
+- CRITICAL: Week overviews: "How is my week?", "What does my week look like?", "My week schedule" → NO calendarId
+- CRITICAL: Schedule queries: "What schedule I have on 27th?", "List meetings next two weeks" → NO calendarId
 - Availability questions: "Am I free at 3pm?", "When am I available?" → NO calendarId
 - Broad meeting searches: "Any meetings this week?", "What meetings do I have?" → NO calendarId
 - Event searches: "When is my Office meeting?", "What time is my client call?" → NO calendarId
@@ -31,16 +33,25 @@ Use your natural language understanding to determine which calendar(s) to check:
 - User mentions account type: "personal appointments" → calendarId: "personal"
 - User specifies primary/secondary: "my secondary calendar" → calendarId: "secondary"
 - Context suggests specific calendar: "team meeting" (likely work) → calendarId: "work"
+- Explicit single calendar requests: "What my work week looks like?" → calendarId: "work"
+- Targeted queries: "What personal events do I have on Jul 30?" → calendarId: "personal"
 
 **CRITICAL Examples:**
+
+**BOTH CALENDARS (NO calendarId):**
 - "How does my day look?" → getEvents(timeMin, timeMax) - NO calendarId parameter
-- "Do I have meetings today?" → getEvents(timeMin, timeMax) - NO calendarId parameter
-- "What's my schedule?" → getEvents(timeMin, timeMax) - NO calendarId parameter
+- "How is my week looks like?" → getEvents(timeMin, timeMax) - NO calendarId parameter
+- "What schedule I have on 27th of July?" → getEvents(timeMin, timeMax) - NO calendarId parameter
+- "List meetings in next two weeks" → getEvents(timeMin, timeMax) - NO calendarId parameter
 - "When is my Office meeting?" → getEvents(timeMin, timeMax) - NO calendarId parameter (use 7-day range)
 - "What time is my client call?" → getEvents(timeMin, timeMax) - NO calendarId parameter (use 7-day range)
+- "Am I busy at 2pm?" → getEvents(timeMin, timeMax) - NO calendarId parameter
+
+**SPECIFIC CALENDAR (WITH calendarId):**
+- "What my work week looks like?" → getEvents(timeMin, timeMax, calendarId: "work")
+- "What personal events do I have on Jul 30?" → getEvents(timeMin, timeMax, calendarId: "personal")
 - "Do I have work meetings?" → getEvents(timeMin, timeMax, calendarId: "work")
 - "Any personal appointments?" → getEvents(timeMin, timeMax, calendarId: "personal")
-- "Am I busy at 2pm?" → getEvents(timeMin, timeMax) - NO calendarId parameter
 
 **SMART TIME RANGE SELECTION:**
 You must intelligently choose time ranges based on query type:
