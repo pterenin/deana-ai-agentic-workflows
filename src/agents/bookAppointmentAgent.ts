@@ -1,6 +1,153 @@
 import axios from 'axios';
 import { getEvents, createEvent } from '../activities/calendar';
 
+// Helper function to parse actual confirmed time from phone call transcript
+function parseActualTimeFromTranscript(transcript: string): string | null {
+  console.log(
+    '[parseActualTimeFromTranscript] Parsing transcript:',
+    transcript
+  );
+
+  // Enhanced regex patterns to catch confirmed appointment times
+  const timePatterns = [
+    /confirmed.*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
+    /appointment.*?(?:confirmed|finalized|booked|set).*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
+    /(?:confirmed|finalized|booked|set).*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
+    /we have.*?(?:confirmed|appointment).*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
+    /(?:at|for)\s*(\d{1,2})\s*(?:PM|AM).*?(?:with|Tom|stylist)/gi,
+    /(\d{1,2})\s*(?:PM|AM).*?(?:confirmed|Tom|stylist|available)/gi,
+    /available.*?(?:at|for)\s*(\d{1,2})\s*PM/gi,
+    /(\d{1,2})\s*(?:o'clock)?.*?(?:PM|AM)/gi,
+  ];
+
+  const allMatches = [];
+
+  for (const pattern of timePatterns) {
+    let match;
+    while ((match = pattern.exec(transcript)) !== null) {
+      const hour = parseInt(match[1]);
+      if (hour >= 1 && hour <= 12) {
+        // Convert to 24-hour format (assume PM for appointments)
+        const hour24 = hour === 12 ? 12 : hour + 12;
+        const timeStr = `${hour24.toString().padStart(2, '0')}:00`;
+        allMatches.push({
+          time: timeStr,
+          hour: hour,
+          context: match[0],
+        });
+        console.log(
+          `[parseActualTimeFromTranscript] Found potential time: ${hour} -> ${timeStr} in context: "${match[0]}"`
+        );
+      }
+    }
+  }
+
+  if (allMatches.length > 0) {
+    // Return the last/most recent confirmed time (usually the final confirmation)
+    const finalTime = allMatches[allMatches.length - 1];
+    console.log(
+      `[parseActualTimeFromTranscript] Using final confirmed time: ${finalTime.time}`
+    );
+    return finalTime.time;
+  }
+
+  console.log(
+    '[parseActualTimeFromTranscript] No confirmed time found in transcript'
+  );
+  return null;
+}
+
+// Helper function to convert 24-hour time to 12-hour format for user-friendly display
+function convertTo12Hour(time24: string): string {
+  const [hours, minutes] = time24.split(':');
+  const hour = parseInt(hours);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return `${hour12}:${minutes} ${ampm}`;
+}
+
+// Helper function to validate if phone call was actually successful
+function validateCallSuccess(
+  callData: any,
+  transcript: string
+): { success: boolean; message: string } {
+  console.log('[validateCallSuccess] Validating call:', {
+    status: callData?.status,
+    endedReason: callData?.endedReason,
+    summary: callData?.summary || 'No summary',
+    transcriptLength: transcript?.length || 0,
+    customerNumber: callData?.customer?.number,
+  });
+
+  // Check if call ended successfully
+  if (callData?.status !== 'ended') {
+    return {
+      success: false,
+      message: `Call failed - status: ${callData?.status || 'unknown'}`,
+    };
+  }
+
+  // Check for call failure reasons
+  const endedReason = callData?.endedReason;
+  const customerNumber = callData?.customer?.number || 'unknown number';
+
+  if (
+    endedReason === 'no-answer' ||
+    endedReason === 'busy' ||
+    endedReason === 'failed'
+  ) {
+    return {
+      success: false,
+      message: `There was a problem booking the appointment. The number ${customerNumber} did not answer or the call failed.`,
+    };
+  }
+
+  if (
+    endedReason === 'customer-ended-call' &&
+    (!transcript || transcript.trim().length < 20)
+  ) {
+    return {
+      success: false,
+      message: `There was a problem booking the appointment. The number ${customerNumber} got disconnected before completing the booking.`,
+    };
+  }
+
+  // Check if we have a meaningful transcript
+  if (!transcript || transcript.trim().length < 10) {
+    return {
+      success: false,
+      message: `There was a problem booking the appointment. The number ${customerNumber} did not answer or got disconnected.`,
+    };
+  }
+
+  // Check if we have a summary (indicates successful call processing)
+  if (!callData?.summary || callData.summary.trim().length < 10) {
+    return {
+      success: false,
+      message: `There was a problem booking the appointment. The number ${customerNumber} did not answer or got disconnected.`,
+    };
+  }
+
+  // Check for explicit booking failure in transcript or summary
+  const failureKeywords =
+    /sorry|cannot|unable|closed|not available|no appointments|fully booked/i;
+  if (
+    failureKeywords.test(transcript) ||
+    failureKeywords.test(callData?.summary || '')
+  ) {
+    return {
+      success: false,
+      message: `The appointment could not be booked. The business ${customerNumber} indicated they are not available or fully booked.`,
+    };
+  }
+
+  console.log('[validateCallSuccess] Call validation passed');
+  return {
+    success: true,
+    message: 'Call completed successfully',
+  };
+}
+
 // Simple extraction for demo; replace with robust NLP/date parsing as needed
 function extractAppointmentDetails(userRequest: string) {
   // Example: "Book a hair appointment tomorrow at 4pm"
@@ -13,20 +160,24 @@ function extractAppointmentDetails(userRequest: string) {
   const tomorrow = /tomm?orr?ow|next day/i.test(userRequest);
   const today = /today|now/i.test(userRequest);
 
-  // Default to tomorrow if no specific date is found
-  const date = tomorrow
+  console.log('[extractAppointmentDetails] Date parsing:', {
+    userRequest,
+    today,
+    tomorrow,
+    todayMatch: userRequest.match(/today|now/i),
+    tomorrowMatch: userRequest.match(/tomm?orr?ow|next day/i),
+  });
+
+  // Fix: Properly handle today vs tomorrow vs default
+  const date = today
+    ? new Date() // TODAY - current date
+    : tomorrow
     ? (() => {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        return tomorrow;
-      })()
-    : today
-    ? new Date()
-    : (() => {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        return tomorrow;
-      })(); // Default to tomorrow
+        const tomorrowDate = new Date();
+        tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+        return tomorrowDate;
+      })() // TOMORROW - next day
+    : new Date(); // DEFAULT to TODAY, not tomorrow
 
   let hour = 16; // default 4pm
   let minute = 0;
@@ -224,16 +375,89 @@ export async function bookAppointmentAgent(
       transcript = poll.data.transcript;
       console.log('[poll] - ', poll.data);
     }
-    // 4. If confirmed, create calendar event
-    // (Assume confirmation if call status is 'ended' and transcript contains confirmation)
+    // 4. Validate call success before creating calendar event
+    const callValidation = validateCallSuccess(poll.data, transcript);
+
+    if (!callValidation.success) {
+      console.log(
+        '[bookAppointmentAgent] Call validation failed:',
+        callValidation
+      );
+
+      onProgress?.({
+        type: 'error',
+        content: `Failed to book appointment: ${callValidation.message}`,
+      });
+
+      return {
+        error: true,
+        message: callValidation.message,
+        appointment: null,
+        transcript,
+        callDetails: poll.data,
+      };
+    }
+
+    // 5. If confirmed, create calendar event using ACTUAL confirmed time from transcript
     if (/confirm|booked|scheduled|appointment is set|yes/i.test(transcript)) {
       onProgress?.({ type: 'progress', content: 'Creating calendar event...' });
+
+      // Parse the ACTUAL confirmed time from the transcript
+      const actualTime = parseActualTimeFromTranscript(transcript);
+      let actualStartISO = startISO; // Default to original if parsing fails
+      let actualEndISO = endISO;
+
+      if (actualTime) {
+        console.log(
+          '[bookAppointmentAgent] Original requested time:',
+          details.start_time
+        );
+        console.log(
+          '[bookAppointmentAgent] Actual confirmed time from transcript:',
+          actualTime
+        );
+
+        // Create new ISO strings with the actual confirmed time
+        actualStartISO = `${details.date}T${actualTime}:00-07:00`;
+        const actualEndHour = String(
+          parseInt(actualTime.split(':')[0]) + 1
+        ).padStart(2, '0');
+        const actualEndMinute = actualTime.split(':')[1];
+        actualEndISO = `${details.date}T${actualEndHour}:${actualEndMinute}:00-07:00`;
+
+        console.log('[bookAppointmentAgent] Using actual calendar times:', {
+          start: actualStartISO,
+          end: actualEndISO,
+        });
+      }
+
       await createEvent(creds, calendarId, {
-        start: startISO,
-        end: endISO,
+        start: actualStartISO,
+        end: actualEndISO,
         summary: `${details.service} appointment`,
         timeZone: 'America/Los_Angeles',
       });
+
+      // Check if time was changed and prepare notification message
+      let timeChangeNotification = '';
+      if (actualTime && actualTime !== details.start_time) {
+        const originalTime12hr = convertTo12Hour(details.start_time);
+        const actualTime12hr = convertTo12Hour(actualTime);
+        timeChangeNotification = ` Please note that the appointment time was adjusted from your original request of ${originalTime12hr} to ${actualTime12hr} based on availability confirmed during the call.`;
+
+        console.log('[bookAppointmentAgent] Time change detected:', {
+          original: originalTime12hr,
+          actual: actualTime12hr,
+          notification: timeChangeNotification,
+        });
+      }
+
+      return {
+        transcript,
+        callDetails: poll.data,
+        appointment: details,
+        timeChangeNotification, // Include this for the AI to use in response
+      };
     }
     return { transcript, callDetails: poll.data, appointment: details };
   } catch (error: any) {
