@@ -532,6 +532,14 @@ export async function runMainAgent(
           if (email && functionName === 'sendEmail' && !functionArgs.from) {
             functionArgs.from = email;
           }
+          // Inject phone/task defaults for general call tool
+          if (functionName === 'placeGeneralCall') {
+            // Always override with trusted values from the session/user input
+            if (context?.userPhone) {
+              functionArgs.phone = context.userPhone;
+            }
+            functionArgs.task = userMessage;
+          }
           onProgress?.({
             type: 'progress',
             content: `Calling ${functionName}...`,

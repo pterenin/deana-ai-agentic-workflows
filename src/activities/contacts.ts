@@ -38,8 +38,8 @@ export async function findContactEmailByName(
       '[findContactEmailByName] Using test credentials, returning mock contact data...'
     );
     const mockContacts: { [key: string]: string } = {
-      mike: 'pavel.terenin@gmail.com',
-      bob: 'tps8327@gmail.com',
+      mike: 'pave1l.terenin@gmail.com',
+      bob: 'tps83127@gmail.com',
       alice: 'alice@example.com',
       john: 'john@example.com',
       sarah: 'sarah@example.com',
@@ -94,8 +94,8 @@ export async function findContactEmailByName(
 
     // Try mock contacts when no real contact is found
     const mockContacts: { [key: string]: string } = {
-      mike: 'pavel.terenin@gmail.com',
-      bob: 'tps8327@gmail.com',
+      mike: 'pavel1.terenin@gmail.com',
+      bob: 'tps18327@gmail.com',
       alice: 'alice@example.com',
       john: 'john@example.com',
       sarah: 'sarah@example.com',
@@ -146,8 +146,8 @@ export async function findContactEmailByName(
       '[findContactEmailByName] Falling back to mock contact data...'
     );
     const mockContacts: { [key: string]: string } = {
-      mike: 'pavel.terenin@gmail.com',
-      bob: 'tps8327@gmail.com',
+      mike: 'pavel1.terenin@gmail.com',
+      bob: 'tps83271@gmail.com',
       alice: 'alice@example.com',
       john: 'john@example.com',
       sarah: 'sarah@example.com',

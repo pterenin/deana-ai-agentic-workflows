@@ -23,4 +23,19 @@ export interface SessionContext {
   userTimeZone?: string;
   clientNowISO?: string;
   lastBookingConflict?: any;
+  // Persist rescheduling state across messages
+  rescheduleContext?: {
+    eventId: string;
+    eventSummary: string;
+    calendarEmail: string;
+    originalStart: string;
+    originalEnd: string;
+    proposedOptions?: Array<{
+      option: number;
+      label: string;
+      startISO: string;
+      endISO: string;
+      timeDisplay: string;
+    }>;
+  };
 }

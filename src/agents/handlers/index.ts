@@ -13,6 +13,7 @@ import { emailHandlers } from './emailHandlers';
 import { appointmentIntegrationHandlers } from './appointmentIntegrationHandlers';
 import { callSummaryAccessHandler } from './callSummaryAccessHandler';
 import { sendEmail } from './sendEmailHandler';
+import { placeGeneralCallHandler } from '../tools/generalCallTools';
 
 export const allHandlers = {
   ...calendarHandlers,
@@ -21,5 +22,6 @@ export const allHandlers = {
   ...emailHandlers,
   ...appointmentIntegrationHandlers,
   ...callSummaryAccessHandler,
+  placeGeneralCall: placeGeneralCallHandler,
   sendEmail,
 };
