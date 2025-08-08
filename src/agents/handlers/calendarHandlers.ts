@@ -67,9 +67,9 @@ function determineTargetAccount(
 ): AccountInfo | 'both' | null {
   if (!accounts.primary) return null;
 
-  const messageLower = userMessage.toLowerCase();
-  const primaryTitle = accounts.primary.title.toLowerCase();
-  const secondaryTitle = accounts.secondary?.title.toLowerCase();
+  const messageLower = (userMessage || '').toLowerCase();
+  const primaryTitle = (accounts.primary?.title || '').toLowerCase();
+  const secondaryTitle = (accounts.secondary?.title || '').toLowerCase();
 
   // If AI explicitly omitted calendarId, it wants to check both calendars
   if (!calendarIdFromAI && accounts.secondary) {
@@ -99,7 +99,7 @@ function determineTargetAccount(
   if (
     (isEventSearchQuery || isScheduleOverviewQuery) &&
     hasNoCalendarMention &&
-    accounts.secondary
+    !!accounts.secondary
   ) {
     console.log(
       '🧠 [determineTargetAccount] Schedule/event query without calendar specification - checking both calendars'
@@ -204,7 +204,10 @@ const getEventsMultiAccount = async (
       console.log(
         '🚨 [SAFETY] AI passed email for broad query - overriding to check both calendars'
       );
-      calendarIdToUse = undefined; // Force multi-calendar check
+      // Only force multi if a secondary account exists; otherwise, keep primary
+      calendarIdToUse = context.accounts.secondary
+        ? undefined
+        : context.accounts.primary.email;
     }
 
     const targetAccount = determineTargetAccount(
@@ -224,39 +227,86 @@ const getEventsMultiAccount = async (
     );
 
     if (targetAccount === 'both') {
+      if (!context.accounts.secondary) {
+        // Safety: if no secondary, fall back to primary-only
+        onProgress?.({
+          type: 'progress',
+          content: `Fetching events from your ${context.accounts.primary.title} calendar...`,
+        });
+        const events = await getEvents(
+          context.accounts.primary.creds,
+          context.accounts.primary.email,
+          args.timeMin,
+          args.timeMax
+        );
+        return {
+          events,
+          count: events.length,
+          account: {
+            title: context.accounts.primary.title,
+            email: context.accounts.primary.email,
+          },
+        };
+      }
+      // Helper to fetch one calendar safely so one failure doesn't mask the other
+      const fetchEventsSafe = async (
+        title: string,
+        creds: any,
+        email: string,
+        timeMin: string,
+        timeMax: string
+      ): Promise<{ events: any[] | null; error: Error | null }> => {
+        try {
+          const events = await getEvents(creds, email, timeMin, timeMax);
+          return { events, error: null };
+        } catch (e: any) {
+          console.error(
+            `⚠️ [getEventsMultiAccount] Failed to fetch ${title} calendar:`,
+            e?.message || e
+          );
+          return { events: null, error: e };
+        }
+      };
+
       // Fetch from both calendars
       onProgress?.({
         type: 'progress',
         content: 'Checking both your calendars...',
       });
 
-      const [primaryEvents, secondaryEvents] = await Promise.all([
-        getEvents(
+      const [primaryRes, secondaryRes] = await Promise.all([
+        fetchEventsSafe(
+          context.accounts.primary.title,
           context.accounts.primary.creds,
           context.accounts.primary.email,
           args.timeMin,
           args.timeMax
         ),
-        context.accounts.secondary
-          ? getEvents(
-              context.accounts.secondary.creds,
-              context.accounts.secondary.email,
-              args.timeMin,
-              args.timeMax
-            )
-          : Promise.resolve([]),
+        fetchEventsSafe(
+          context.accounts.secondary.title,
+          context.accounts.secondary.creds,
+          context.accounts.secondary.email,
+          args.timeMin,
+          args.timeMax
+        ),
       ]);
 
+      const primaryEvents = primaryRes.events || [];
+      const secondaryEvents = secondaryRes.events || [];
       const primaryCount = primaryEvents.length;
       const secondaryCount = secondaryEvents.length;
 
       onProgress?.({
         type: 'progress',
-        content: `Found ${primaryCount} events in your ${
-          context.accounts.primary.title
-        } calendar and ${secondaryCount} events in your ${
-          context.accounts.secondary?.title || 'secondary'
-        } calendar`,
+        content: secondaryRes.error
+          ? `Found ${primaryCount} events in your ${
+              context.accounts.primary.title
+            } calendar. Your ${
+              context.accounts.secondary.title
+            } calendar could not be fetched (${
+              secondaryRes.error?.message || 'error'
+            }).`
+          : `Found ${primaryCount} events in your ${context.accounts.primary.title} calendar and ${secondaryCount} events in your ${context.accounts.secondary.title} calendar`,
       });
 
       // Check for conflicts between calendars
@@ -295,14 +345,13 @@ const getEventsMultiAccount = async (
             events: primaryEvents,
             count: primaryCount,
           },
-          secondary: context.accounts.secondary
-            ? {
-                title: context.accounts.secondary.title,
-                email: context.accounts.secondary.email,
-                events: secondaryEvents,
-                count: secondaryCount,
-              }
-            : null,
+          secondary: {
+            title: context.accounts.secondary.title,
+            email: context.accounts.secondary.email,
+            events: secondaryEvents,
+            count: secondaryCount,
+            error: secondaryRes.error ? secondaryRes.error.message : undefined,
+          },
         },
         // ✨ Make conflict details available to AI for rescheduling
         conflictDetails:
@@ -334,27 +383,54 @@ const getEventsMultiAccount = async (
         type: 'progress',
         content: `Fetching events from your ${targetAccount.title} calendar...`,
       });
+      try {
+        const events = await getEvents(
+          targetAccount.creds,
+          targetAccount.email,
+          args.timeMin,
+          args.timeMax
+        );
 
-      const events = await getEvents(
-        targetAccount.creds,
-        targetAccount.email,
-        args.timeMin,
-        args.timeMax
-      );
+        onProgress?.({
+          type: 'progress',
+          content: `Found ${events.length} events in your ${targetAccount.title} calendar`,
+        });
 
-      onProgress?.({
-        type: 'progress',
-        content: `Found ${events.length} events in your ${targetAccount.title} calendar`,
-      });
-
-      return {
-        events,
-        count: events.length,
-        account: {
-          title: targetAccount.title,
-          email: targetAccount.email,
-        },
-      };
+        return {
+          events,
+          count: events.length,
+          account: {
+            title: targetAccount.title,
+            email: targetAccount.email,
+          },
+        };
+      } catch (e: any) {
+        const message = e?.message || 'Unknown error';
+        console.error(
+          `⚠️ [getEventsMultiAccount] Failed to fetch ${targetAccount.title} calendar:`,
+          message
+        );
+        const requiresReauth =
+          message.includes('invalid_grant') ||
+          e?.response?.data?.error === 'invalid_grant';
+        onProgress?.({
+          type: 'progress',
+          content: `Could not fetch your ${
+            targetAccount.title
+          } calendar (${message}).${
+            requiresReauth ? ' Please reconnect this account.' : ''
+          }`,
+        });
+        return {
+          events: [],
+          count: 0,
+          account: {
+            title: targetAccount.title,
+            email: targetAccount.email,
+          },
+          error: { message, requiresReauth },
+        };
+      }
     } else {
       throw new Error('Unable to determine target account');
     }

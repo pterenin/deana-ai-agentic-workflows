@@ -91,16 +91,10 @@ export async function getEvents(
       code: (err as any)?.code,
       status: (err as any)?.status,
     });
-    console.log('🔄 [getEvents] Falling back to mock data...');
-
-    // Enhanced mock data for testing with different users
-    const requestedTime = new Date(timeMin);
-    const hour = requestedTime.getHours();
-
-    // If using test credentials (access_token === "valid"), return sample events
+    // Only return mock data for explicit test credentials; otherwise, propagate
     const isTestCredentials = creds?.access_token === 'valid';
-
     if (isTestCredentials) {
+      console.log('🔄 [getEvents] Falling back to TEST mock data...');
       // Return sample events for testing - events for "today"
       const today = new Date();
       const todayStart = new Date(
@@ -109,28 +103,28 @@ export async function getEvents(
         today.getDate(),
         9,
         0
-      ); // 9 AM today
+      );
       const todayEnd = new Date(
         today.getFullYear(),
         today.getMonth(),
         today.getDate(),
         10,
         0
-      ); // 10 AM today
+      );
       const todayStart2 = new Date(
         today.getFullYear(),
         today.getMonth(),
         today.getDate(),
         14,
         0
-      ); // 2 PM today
+      );
       const todayEnd2 = new Date(
         today.getFullYear(),
         today.getMonth(),
         today.getDate(),
         15,
         0
-      ); // 3 PM today
+      );
 
       const mockData = [
         {
@@ -157,22 +151,7 @@ export async function getEvents(
       return mockData;
     }
 
-    // Original logic: only return conflicts for specific times to simulate realistic calendar
-    const hasConflict = hour === 8 || hour === 14; // 8am or 2pm
-
-    const mockData = hasConflict
-      ? [
-          {
-            id: 'mock1',
-            summary: 'Mock Event',
-            start: { dateTime: timeMin },
-            end: { dateTime: timeMax },
-          },
-        ]
-      : []; // No conflicts for other times
-
-    console.log('🎯 [getEvents] Returning mock data:', mockData);
-    return mockData;
+    throw err;
   }
 }
 

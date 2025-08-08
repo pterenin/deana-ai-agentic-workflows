@@ -1,4 +1,8 @@
-import { getAvailability, updateEvent } from '../../activities/calendar';
+import {
+  getAvailability,
+  updateEvent,
+  getEvents,
+} from '../../activities/calendar';
 import { SessionContext } from '../types';
 
 // Helper function to generate alternative time slots around an event
@@ -141,6 +145,18 @@ export const conflictResolutionHandlers = {
         content: `Found ${availableAlternatives.length} available alternative time slots`,
       });
 
+      // Persist reschedule context for multi-message flows
+      if (context) {
+        (context as any).rescheduleContext = {
+          eventId: args.conflictingEventId,
+          eventSummary: args.eventSummary,
+          calendarEmail: args.calendarEmail,
+          originalStart: args.originalStart,
+          originalEnd: args.originalEnd,
+          proposedOptions: availableAlternatives,
+        };
+      }
+
       return {
         success: true,
         conflictingEvent: {
@@ -179,6 +195,77 @@ Which option would you prefer, or would you like to suggest a different time?`,
     context?: SessionContext
   ) => {
     try {
+      // Helper: determine if a datetime string includes timezone info
+      const hasTimezone = (s: string): boolean => /Z|[+-]\d{2}:?\d{2}$/.test(s);
+
+      // Helper: get timezone offset in minutes for a given UTC date and IANA tz
+      const getTzOffsetMinutes = (utcDate: Date, timeZone: string): number => {
+        const dtf = new Intl.DateTimeFormat('en-US', {
+          timeZone,
+          hour12: false,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+        const parts = dtf.formatToParts(utcDate);
+        const filled: Record<string, string> = {};
+        for (const p of parts) {
+          if (p.type !== 'literal') filled[p.type] = p.value;
+        }
+        const asTs = Date.UTC(
+          Number(filled.year),
+          Number(filled.month) - 1,
+          Number(filled.day),
+          Number(filled.hour),
+          Number(filled.minute),
+          Number(filled.second)
+        );
+        // local(tz) = utc + offset → offset = local - utc
+        return Math.round((asTs - utcDate.getTime()) / 60000);
+      };
+
+      // Helper: convert a naive local time string (YYYY-MM-DDTHH:mm[:ss]) in tz → ISO Z
+      const toZonedIso = (localStr: string, timeZone: string): string => {
+        const m = localStr.match(
+          /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
+        );
+        if (!m) {
+          // Fallback: let Date parse and hope it has tz; then toISOString
+          return new Date(localStr).toISOString();
+        }
+        const [_, y, mo, da, hh, mm, ss = '00'] = m;
+        const utcGuess = Date.UTC(
+          Number(y),
+          Number(mo) - 1,
+          Number(da),
+          Number(hh),
+          Number(mm),
+          Number(ss)
+        );
+        const offsetMin = getTzOffsetMinutes(new Date(utcGuess), timeZone);
+        const trueUtcTs = utcGuess - offsetMin * 60000;
+        return new Date(trueUtcTs).toISOString();
+      };
+
+      const resolveCalendarEmail = (
+        input: string | undefined,
+        ctx?: SessionContext
+      ): string | undefined => {
+        if (!ctx?.accounts) return input;
+        const lower = (input || '').toLowerCase();
+        const primary = ctx.accounts.primary.email;
+        const secondary = ctx.accounts.secondary?.email;
+        if (input && (input === primary || input === secondary)) return input;
+        if (lower.includes('work') && secondary) return secondary;
+        if (lower.includes('personal') || lower.includes('primary'))
+          return primary;
+        // If input looks like an email but doesn't match, prefer secondary if present for "work" flows
+        return input && input.includes('@') ? input : secondary || primary;
+      };
+
       console.log('🔧 [DEBUG rescheduleEvent] ==============================');
       console.log('🔧 [DEBUG] Input args:', JSON.stringify(args, null, 2));
       console.log('🔧 [DEBUG] Default creds keys:', Object.keys(creds || {}));
@@ -212,20 +299,37 @@ Which option would you prefer, or would you like to suggest a different time?`,
         content: 'Performing final availability check...',
       });
 
+      // Normalize times to RFC3339 and restore persisted context if needed
+      const userTz = (context as any)?.userTimeZone || 'America/Los_Angeles';
+      const persisted = (context as any)?.rescheduleContext;
+      if (persisted) {
+        args.eventSummary = args.eventSummary || persisted.eventSummary;
+        args.calendarEmail = args.calendarEmail || persisted.calendarEmail;
+        if (!args.eventId || /work_event_id|test|dummy/i.test(args.eventId)) {
+          args.eventId = persisted.eventId;
+        }
+      }
+      const normalizedStart = hasTimezone(args.newStart)
+        ? args.newStart
+        : toZonedIso(args.newStart, userTz);
+      const normalizedEnd = hasTimezone(args.newEnd)
+        ? args.newEnd
+        : toZonedIso(args.newEnd, userTz);
+
       let isAvailable = true;
       if (context?.accounts) {
         const primaryCheck = await getAvailability(
           context.accounts.primary.creds,
-          args.newStart,
-          args.newEnd,
+          normalizedStart,
+          normalizedEnd,
           [context.accounts.primary.email]
         );
 
         const secondaryCheck = context.accounts.secondary
           ? await getAvailability(
               context.accounts.secondary.creds,
-              args.newStart,
-              args.newEnd,
+              normalizedStart,
+              normalizedEnd,
               [context.accounts.secondary.email]
             )
           : { available: true };
@@ -243,21 +347,34 @@ Which option would you prefer, or would you like to suggest a different time?`,
 
       // Find the correct credentials for the calendar containing the event
       let targetCreds = creds;
+      // Force calendar email from persisted context if present
+      let resolvedCalendarEmail = resolveCalendarEmail(
+        args.calendarEmail,
+        context
+      );
+      const persistedForCalendar = (context as any)?.rescheduleContext
+        ?.calendarEmail;
+      if (persistedForCalendar) {
+        resolvedCalendarEmail = resolveCalendarEmail(
+          persistedForCalendar,
+          context
+        );
+      }
       if (context?.accounts) {
-        if (args.calendarEmail === context.accounts.primary.email) {
+        if (resolvedCalendarEmail === context.accounts.primary.email) {
           targetCreds = context.accounts.primary.creds;
           console.log(
             '🔧 [DEBUG] Using PRIMARY calendar creds for:',
-            args.calendarEmail
+            resolvedCalendarEmail
           );
         } else if (
           context.accounts.secondary &&
-          args.calendarEmail === context.accounts.secondary.email
+          resolvedCalendarEmail === context.accounts.secondary.email
         ) {
           targetCreds = context.accounts.secondary.creds;
           console.log(
             '🔧 [DEBUG] Using SECONDARY calendar creds for:',
-            args.calendarEmail
+            resolvedCalendarEmail
           );
         } else {
           console.log(
@@ -273,11 +390,81 @@ Which option would you prefer, or would you like to suggest a different time?`,
         }
       }
 
+      // Try to resolve the correct event ID from the original event time/context
+      let resolvedEventId = args.eventId;
+      if (resolvedCalendarEmail && targetCreds) {
+        try {
+          // Build day range based on the ORIGINAL event time when available
+          const referenceISO =
+            (context as any)?.rescheduleContext?.originalStart ||
+            normalizedStart;
+          const parts = new Date(referenceISO);
+          const y = parts.getUTCFullYear();
+          const m = parts.getUTCMonth() + 1;
+          const d = parts.getUTCDate();
+          const pad = (n: number) => String(n).padStart(2, '0');
+          const dayStartLocal = `${y}-${pad(m)}-${pad(d)}T00:00:00`;
+          const dayEndLocal = `${y}-${pad(m)}-${pad(d)}T23:59:59`;
+          const timeMinISO = toZonedIso(dayStartLocal, userTz);
+          const timeMaxISO = toZonedIso(dayEndLocal, userTz);
+
+          onProgress?.({
+            type: 'progress',
+            content: 'Locating the exact event to reschedule...',
+          });
+
+          const dayEvents = await getEvents(
+            targetCreds,
+            resolvedCalendarEmail,
+            timeMinISO,
+            timeMaxISO
+          );
+
+          const requestedLower = (args.eventSummary || '').toLowerCase();
+
+          // If the provided eventId doesn't exist in this day's events, force resolution
+          const idExists = dayEvents.some((e: any) => e.id === args.eventId);
+
+          let best: any = null;
+          let bestDelta = Number.POSITIVE_INFINITY;
+          const targetTs = new Date(referenceISO).getTime();
+          for (const e of dayEvents) {
+            const sumLower = (e.summary || '').toLowerCase();
+            if (requestedLower && !sumLower.includes(requestedLower)) continue;
+            const eventStart = e.start?.dateTime
+              ? new Date(e.start.dateTime).getTime()
+              : 0;
+            const delta = Math.abs(eventStart - targetTs);
+            if (delta < bestDelta) {
+              best = e;
+              bestDelta = delta;
+            }
+          }
+
+          if (!idExists && best?.id) {
+            resolvedEventId = best.id;
+            console.log(
+              '🔧 [DEBUG] Resolved eventId by search:',
+              resolvedEventId,
+              'summary:',
+              best.summary
+            );
+          } else if (!idExists) {
+            console.warn('⚠️ [DEBUG] Could not resolve eventId by search');
+          }
+        } catch (searchErr) {
+          console.error(
+            '⚠️ [DEBUG] Error while resolving eventId by search:',
+            searchErr
+          );
+        }
+      }
+
       console.log('🔧 [DEBUG] Final rescheduling parameters:');
-      console.log('🔧 [DEBUG] - Event ID:', args.eventId);
-      console.log('🔧 [DEBUG] - Calendar Email:', args.calendarEmail);
-      console.log('🔧 [DEBUG] - New Start:', args.newStart);
-      console.log('🔧 [DEBUG] - New End:', args.newEnd);
+      console.log('🔧 [DEBUG] - Event ID:', resolvedEventId);
+      console.log('🔧 [DEBUG] - Calendar Email:', resolvedCalendarEmail);
+      console.log('🔧 [DEBUG] - New Start:', normalizedStart);
+      console.log('🔧 [DEBUG] - New End:', normalizedEnd);
       console.log(
         '🔧 [DEBUG] - Target Creds Keys:',
         Object.keys(targetCreds || {})
@@ -286,11 +473,11 @@ Which option would you prefer, or would you like to suggest a different time?`,
       // Update the event
       const result = await updateEvent(
         targetCreds,
-        args.calendarEmail,
-        args.eventId,
+        resolvedCalendarEmail || args.calendarEmail,
+        resolvedEventId,
         {
-          start: args.newStart,
-          end: args.newEnd,
+          start: normalizedStart,
+          end: normalizedEnd,
           summary: args.eventSummary,
         }
       );
