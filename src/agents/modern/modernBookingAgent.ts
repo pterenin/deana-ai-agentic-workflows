@@ -20,10 +20,25 @@ export class ModernBookingAgent {
   constructor(
     private creds: any,
     private email?: string,
+    private phone?: string,
+    private timezone?: string,
+    private clientNowISO?: string,
     private onProgress?: (update: any) => void
   ) {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    this.toolExecutor = new ModernBookingToolExecutor(creds, email, onProgress);
+    console.log('[ModernBookingAgent] Initialized with', {
+      phone,
+      timezone,
+      clientNowISO,
+    });
+    this.toolExecutor = new ModernBookingToolExecutor(
+      creds,
+      email,
+      phone,
+      timezone,
+      clientNowISO,
+      onProgress
+    );
   }
 
   async processBookingRequest(
@@ -66,11 +81,36 @@ export class ModernBookingAgent {
 
           try {
             const args = JSON.parse(toolCall.function.arguments);
+            // Provide the original user message to the tool executor so downstream can use raw phrasing
+            this.toolExecutor.originalUserMessage = userMessage;
 
             const result = await this.toolExecutor.executeFunction(
               toolCall.function.name,
               args
             );
+
+            // If booking tool reports failure without a conflict, short-circuit and reply immediately
+            if (
+              toolCall.function.name === 'bookAppointment' &&
+              result &&
+              result.success === false &&
+              !result.conflict
+            ) {
+              const failureMessage =
+                result.message ||
+                'The booking could not be completed based on the call results.';
+              return {
+                response: failureMessage,
+                context,
+                toolResults: [
+                  {
+                    tool_call_id: toolCall.id,
+                    role: 'tool' as const,
+                    content: JSON.stringify(result),
+                  },
+                ],
+              };
+            }
 
             toolResults.push({
               tool_call_id: toolCall.id,

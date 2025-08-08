@@ -285,6 +285,10 @@ export async function runMainAgent(
       type: 'progress',
       content: 'Detected booking intent. Delegating to BookAppointmentAgent...',
     });
+    console.log(
+      '[runMainAgent] Passing phone to booking agent:',
+      context?.userPhone
+    );
     // Check if user is selecting an alternative
     if (
       context &&
@@ -357,6 +361,7 @@ export async function runMainAgent(
           altUserRequest,
           creds,
           email,
+          context?.userPhone,
           onProgress
         );
         if (result.conflict) {
@@ -412,6 +417,7 @@ export async function runMainAgent(
       userMessage,
       creds,
       email,
+      context?.userPhone,
       onProgress
     );
 

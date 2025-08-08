@@ -82,14 +82,24 @@ export class ModernBookingToolExecutor {
   constructor(
     private creds: any,
     private email?: string,
+    private phone?: string,
+    private timezone?: string,
+    private clientNowISO?: string,
     private onProgress?: (update: any) => void
   ) {}
+
+  // Will be set by ModernBookingAgent before executing tools
+  public originalUserMessage?: string;
 
   async executeFunction(functionName: string, args: any): Promise<any> {
     this.onProgress?.({
       type: 'progress',
       content: `Executing ${functionName}...`,
     });
+    console.log(
+      '[ModernBookingTools] executeFunction called with phone:',
+      this.phone
+    );
 
     switch (functionName) {
       case 'bookAppointment':
@@ -103,6 +113,10 @@ export class ModernBookingToolExecutor {
 
   private async handleBookAppointment(args: any): Promise<any> {
     const validated = BookAppointmentSchema.parse(args);
+    console.log(
+      '[ModernBookingTools] handleBookAppointment with phone:',
+      this.phone
+    );
 
     // Create a natural language request for the booking agent
     const userRequest = `Book a ${validated.service} appointment on ${validated.date} at ${validated.time}`;
@@ -118,15 +132,23 @@ export class ModernBookingToolExecutor {
         userRequest,
         this.creds,
         this.email,
-        this.onProgress
+        this.phone,
+        this.onProgress,
+        this.timezone,
+        this.clientNowISO,
+        this.originalUserMessage
       );
 
       if (result.error) {
-        return {
-          success: false,
-          message: result.message,
-          error: result.error,
-        };
+        // If it's a genuine failure (not a time conflict), return as a straight failure
+        if (!result.conflict) {
+          return {
+            success: false,
+            message: result.message,
+            error: true,
+          };
+        }
+        // Else pass through to conflict branch below
       }
 
       if (result.conflict) {
@@ -165,6 +187,10 @@ export class ModernBookingToolExecutor {
 
   private async handleSelectAlternativeTime(args: any): Promise<any> {
     const validated = SelectAlternativeSchema.parse(args);
+    console.log(
+      '[ModernBookingTools] handleSelectAlternativeTime with phone:',
+      this.phone
+    );
 
     this.onProgress?.({
       type: 'progress',
@@ -220,7 +246,11 @@ export class ModernBookingToolExecutor {
         newRequest,
         this.creds,
         this.email,
-        this.onProgress
+        this.phone,
+        this.onProgress,
+        this.timezone,
+        this.clientNowISO,
+        this.originalUserMessage
       );
 
       if (result.error) {

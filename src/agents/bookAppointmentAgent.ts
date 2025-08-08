@@ -1,59 +1,36 @@
 import axios from 'axios';
-import { getEvents, createEvent } from '../activities/calendar';
+import OpenAI from 'openai';
+import { getAvailability, createEvent } from '../activities/calendar';
 
-// Helper function to parse actual confirmed time from phone call transcript
-function parseActualTimeFromTranscript(transcript: string): string | null {
-  console.log(
-    '[parseActualTimeFromTranscript] Parsing transcript:',
-    transcript
-  );
+// Get YYYY-MM-DD for a given Date in a specific IANA timezone
+function formatDateISOInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const y = parts.find((p) => p.type === 'year')?.value || '1970';
+  const m = parts.find((p) => p.type === 'month')?.value || '01';
+  const d = parts.find((p) => p.type === 'day')?.value || '01';
+  return `${y}-${m}-${d}`;
+}
 
-  // Enhanced regex patterns to catch confirmed appointment times
-  const timePatterns = [
-    /confirmed.*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
-    /appointment.*?(?:confirmed|finalized|booked|set).*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
-    /(?:confirmed|finalized|booked|set).*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
-    /we have.*?(?:confirmed|appointment).*?(?:for|at|on).*?(\d{1,2})\s*(?:o'clock|PM|AM)/gi,
-    /(?:at|for)\s*(\d{1,2})\s*(?:PM|AM).*?(?:with|Tom|stylist)/gi,
-    /(\d{1,2})\s*(?:PM|AM).*?(?:confirmed|Tom|stylist|available)/gi,
-    /available.*?(?:at|for)\s*(\d{1,2})\s*PM/gi,
-    /(\d{1,2})\s*(?:o'clock)?.*?(?:PM|AM)/gi,
-  ];
-
-  const allMatches = [];
-
-  for (const pattern of timePatterns) {
-    let match;
-    while ((match = pattern.exec(transcript)) !== null) {
-      const hour = parseInt(match[1]);
-      if (hour >= 1 && hour <= 12) {
-        // Convert to 24-hour format (assume PM for appointments)
-        const hour24 = hour === 12 ? 12 : hour + 12;
-        const timeStr = `${hour24.toString().padStart(2, '0')}:00`;
-        allMatches.push({
-          time: timeStr,
-          hour: hour,
-          context: match[0],
-        });
-        console.log(
-          `[parseActualTimeFromTranscript] Found potential time: ${hour} -> ${timeStr} in context: "${match[0]}"`
-        );
-      }
-    }
-  }
-
-  if (allMatches.length > 0) {
-    // Return the last/most recent confirmed time (usually the final confirmation)
-    const finalTime = allMatches[allMatches.length - 1];
-    console.log(
-      `[parseActualTimeFromTranscript] Using final confirmed time: ${finalTime.time}`
-    );
-    return finalTime.time;
-  }
-
-  console.log(
-    '[parseActualTimeFromTranscript] No confirmed time found in transcript'
-  );
+// Normalize a user-provided phone number to E.164 if possible
+function normalizePhoneNumber(input?: string): string | null {
+  if (!input) return null;
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  // If already in E.164 and valid-ish, accept
+  if (/^\+[1-9]\d{6,14}$/.test(trimmed)) return trimmed;
+  // Strip non-digits
+  const digitsOnly = trimmed.replace(/\D/g, '');
+  if (!digitsOnly) return null;
+  // Simple heuristic: 10 digits -> assume US/CA and prefix +1
+  if (digitsOnly.length === 10) return `+1${digitsOnly}`;
+  // 11-15 digits -> prefix +
+  if (digitsOnly.length >= 11 && digitsOnly.length <= 15)
+    return `+${digitsOnly}`;
   return null;
 }
 
@@ -64,6 +41,237 @@ function convertTo12Hour(time24: string): string {
   const ampm = hour >= 12 ? 'PM' : 'AM';
   const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
   return `${hour12}:${minutes} ${ampm}`;
+}
+
+// Use LLM to extract the actual confirmed start time from the call summary
+async function extractConfirmedTimeFromSummary(
+  summary: string
+): Promise<string | null> {
+  try {
+    if (!summary || summary.trim().length === 0) return null;
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = `You will be given a phone call summary about booking an appointment. Extract the confirmed START time of the appointment.
+
+Rules:
+- Return ONLY a JSON object with a key time24 in 24-hour HH:MM format (e.g., "15:00").
+- If the summary mentions a time RANGE (e.g., 3 PM to 4 PM), return the START time.
+- If no clear time is present, return {"time24": null}.
+
+Summary:
+${summary}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0,
+    });
+    const content = completion.choices?.[0]?.message?.content || '';
+    // Attempt to parse JSON from the response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed && typeof parsed.time24 === 'string') {
+          // Basic sanity check HH:MM
+          if (/^\d{2}:\d{2}$/.test(parsed.time24)) return parsed.time24;
+        }
+      } catch {}
+    }
+    // Fallback: simple regex to find first AM/PM time and convert
+    const fallback = summary.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+    if (fallback) {
+      let hour = parseInt(fallback[1], 10);
+      const minute = fallback[2] ? parseInt(fallback[2], 10) : 0;
+      const ampm = fallback[3]?.toLowerCase();
+      if (ampm === 'pm' && hour < 12) hour += 12;
+      if (ampm === 'am' && hour === 12) hour = 0;
+      return `${hour.toString().padStart(2, '0')}:${minute
+        .toString()
+        .padStart(2, '0')}`;
+    }
+    return null;
+  } catch (e) {
+    console.log(
+      '[extractConfirmedTimeFromSummary] Error:',
+      (e as Error).message
+    );
+    return null;
+  }
+}
+
+// LLM decision: determine if booking succeeded based on call summary, and extract confirmed time if mentioned
+async function analyzeBookingOutcomeFromSummary(
+  summary: string,
+  requestedTime24?: string
+): Promise<{ success: boolean; reason: string; time24: string | null }> {
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = `You will be given a phone call summary for an appointment booking attempt. Decide if the booking succeeded, and extract the FINAL confirmed start time if present.
+
+Return ONLY strict JSON with keys:
+{
+  "success": boolean,
+  "reason": string,  // brief human-readable reason (e.g., "no availability", "confirmed with Alex at 17:00")
+  "time24": string | null // confirmed start time in 24-hour HH:MM if present, else null
+}
+
+Rules:
+- If the summary indicates no availability, a callback needed, technical issue, or not confirmed, success = false.
+- If the summary states the appointment was booked/confirmed/scheduled, success = true.
+- If a new time was agreed (e.g., 5pm), set time24 accordingly (24-hour). If no explicit time, set null.
+- Do not infer a time from the requested window unless the summary says it was confirmed.
+
+Summary:
+${summary}
+
+RequestedTime (for context only, don't assume it's confirmed): ${
+      requestedTime24 || 'unknown'
+    }`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0,
+    });
+    const content = completion.choices?.[0]?.message?.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (
+          typeof parsed.success === 'boolean' &&
+          typeof parsed.reason === 'string'
+        ) {
+          const t =
+            typeof parsed.time24 === 'string' &&
+            /^\d{2}:\d{2}$/.test(parsed.time24)
+              ? parsed.time24
+              : null;
+          return { success: parsed.success, reason: parsed.reason, time24: t };
+        }
+      } catch {}
+    }
+  } catch (e) {
+    console.log(
+      '[analyzeBookingOutcomeFromSummary] Error:',
+      (e as Error).message
+    );
+  }
+  // Fallback conservative: unknown -> not successful
+  return {
+    success: false,
+    reason: 'Could not determine booking outcome from summary',
+    time24: null,
+  };
+}
+
+// Use LLM to extract booking intent details (service, date, time) robustly from user text
+async function extractAppointmentDetailsWithLLM(
+  userRequest: string,
+  opts?: { tz?: string; nowISO?: string }
+): Promise<{
+  service: string;
+  date: string; // YYYY-MM-DD
+  start_time: string; // HH:MM (24-hour)
+  duration_minutes?: number;
+  hair_dresser?: string;
+} | null> {
+  try {
+    const now = opts?.nowISO ? new Date(opts.nowISO) : new Date();
+    const tz = opts?.tz || 'America/Los_Angeles';
+    const todayISO = formatDateISOInTimeZone(now, tz);
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = `You extract booking details from a short user request.
+
+Current local date: ${todayISO}
+Local timezone: ${tz}
+
+Instructions:
+- Resolve ANY relative date phrases strictly relative to the current LOCAL date above, not UTC. Examples: "tomorrow", "day after tomorrow", "next Friday", "day after next Tuesday".
+- Return ONLY strict JSON, no prose.
+- Keys: {"service": string, "date": "YYYY-MM-DD", "start_time": "HH:MM" (24-hour), "duration_minutes": number}
+- If user specifies a range (e.g., 3 PM - 4 PM), choose the start time.
+- If only the hour is given (e.g., "3pm"), set minutes to 00.
+- Misspellings like "tomorow", "tommorow", "tmrw" must be treated as tomorrow.
+- If the request has a relative phrase, the computed date MUST match that phrase relative to the current LOCAL date.
+- Never choose a past date.
+- If service is missing, default to "hair appointment".
+- Default duration_minutes to 60 if not specified.
+
+User request:
+${userRequest}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0,
+    });
+    const content = completion.choices?.[0]?.message?.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    console.log('[LLM Extraction] tz/now/today:', {
+      tz,
+      nowISO: opts?.nowISO,
+      todayISO,
+    });
+    console.log('[LLM Extraction] raw:', content);
+    console.log('[LLM Extraction] parsed:', parsed);
+
+    // Post-fix for common natural language like "tomorrow" to avoid LLM off-by-one
+    const requestLower = userRequest.toLowerCase();
+    const tomorrowRegex =
+      /\b(tomm?orr?ow|tomorow|tmrw|next day|day after today)\b/i;
+    const todayRegex = /\b(today|now)\b/i;
+    const baseToday = todayISO;
+    const baseTomorrowDate = new Date(now);
+    baseTomorrowDate.setDate(baseTomorrowDate.getDate() + 1);
+    const baseTomorrow = formatDateISOInTimeZone(baseTomorrowDate, tz);
+
+    const isTomorrow = tomorrowRegex.test(requestLower);
+    const isToday = todayRegex.test(requestLower);
+    console.log('[LLM Extraction] tokens match:', {
+      isTomorrow,
+      isToday,
+      requestLower,
+    });
+    if (isTomorrow) {
+      console.log(
+        '[LLM Extraction] Forcing date to baseTomorrow due to "tomorrow" token:',
+        baseTomorrow
+      );
+      parsed.date = baseTomorrow;
+    } else if (isToday) {
+      console.log(
+        '[LLM Extraction] Forcing date to baseToday due to "today/now" token:',
+        baseToday
+      );
+      parsed.date = baseToday;
+    }
+    console.log('[LLM Extraction] corrected (if needed):', parsed);
+    if (
+      parsed &&
+      typeof parsed.service === 'string' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) &&
+      /^\d{2}:\d{2}$/.test(parsed.start_time)
+    ) {
+      if (
+        !parsed.duration_minutes ||
+        typeof parsed.duration_minutes !== 'number'
+      ) {
+        parsed.duration_minutes = 60;
+      }
+      return parsed;
+    }
+    return null;
+  } catch (e) {
+    console.log(
+      '[extractAppointmentDetailsWithLLM] Error:',
+      (e as Error).message
+    );
+    return null;
+  }
 }
 
 // Helper function to validate if phone call was actually successful
@@ -78,14 +286,6 @@ function validateCallSuccess(
     transcriptLength: transcript?.length || 0,
     customerNumber: callData?.customer?.number,
   });
-
-  // Check if call ended successfully
-  if (callData?.status !== 'ended') {
-    return {
-      success: false,
-      message: `Call failed - status: ${callData?.status || 'unknown'}`,
-    };
-  }
 
   // Check for call failure reasons
   const endedReason = callData?.endedReason;
@@ -128,19 +328,6 @@ function validateCallSuccess(
     };
   }
 
-  // Check for explicit booking failure in transcript or summary
-  const failureKeywords =
-    /sorry|cannot|unable|closed|not available|no appointments|fully booked/i;
-  if (
-    failureKeywords.test(transcript) ||
-    failureKeywords.test(callData?.summary || '')
-  ) {
-    return {
-      success: false,
-      message: `The appointment could not be booked. The business ${customerNumber} indicated they are not available or fully booked.`,
-    };
-  }
-
   console.log('[validateCallSuccess] Call validation passed');
   return {
     success: true,
@@ -168,16 +355,27 @@ function extractAppointmentDetails(userRequest: string) {
     tomorrowMatch: userRequest.match(/tomm?orr?ow|next day/i),
   });
 
-  // Fix: Properly handle today vs tomorrow vs default
-  const date = today
-    ? new Date() // TODAY - current date
-    : tomorrow
-    ? (() => {
-        const tomorrowDate = new Date();
-        tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-        return tomorrowDate;
-      })() // TOMORROW - next day
-    : new Date(); // DEFAULT to TODAY, not tomorrow
+  // Determine target date with resilient parsing
+  // 1) Explicit ISO date: YYYY-MM-DD
+  const isoDateMatch = userRequest.match(/(\d{4})-(\d{2})-(\d{2})/);
+  // 2) US date: M/D/YYYY or MM/DD/YYYY
+  const usDateMatch = userRequest.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  let date: Date;
+  if (isoDateMatch) {
+    const [, y, m, d] = isoDateMatch;
+    date = new Date(Number(y), Number(m) - 1, Number(d));
+  } else if (usDateMatch) {
+    const [, m, d, y] = usDateMatch;
+    date = new Date(Number(y), Number(m) - 1, Number(d));
+  } else if (today) {
+    date = new Date();
+  } else if (tomorrow) {
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    date = t;
+  } else {
+    date = new Date(); // DEFAULT to TODAY
+  }
 
   let hour = 16; // default 4pm
   let minute = 0;
@@ -234,10 +432,73 @@ export async function bookAppointmentAgent(
   userRequest: string,
   creds: any,
   email?: string,
-  onProgress?: (update: any) => void
+  phone?: string,
+  onProgress?: (update: any) => void,
+  timezone?: string,
+  clientNowISO?: string,
+  originalUserMessage?: string
 ) {
   try {
-    const details = extractAppointmentDetails(userRequest);
+    console.log('[bookAppointmentAgent] invoked with phone:', phone);
+    // Validate and normalize phone number early
+    const normalizedPhone = normalizePhoneNumber(phone);
+    if (!normalizedPhone) {
+      onProgress?.({
+        type: 'error',
+        content:
+          'The phone number provided is missing or invalid. Please provide a valid phone in E.164 format (e.g., +14155552671).',
+      });
+      return {
+        error: true,
+        message:
+          'Invalid or missing phone number. Please provide a valid phone in E.164 format (e.g., +14155552671).',
+        appointment: null,
+      };
+    }
+    // Step 0: Use LLM to robustly extract booking details; fallback to programmatic parsing
+    onProgress?.({
+      type: 'progress',
+      content: 'Understanding your request...',
+    });
+    // Prefer the raw/original message if available for better relative-date parsing
+    const extractionSource = originalUserMessage || userRequest;
+    const llmDetails = await extractAppointmentDetailsWithLLM(
+      extractionSource,
+      {
+        tz: timezone || (creds?.timezone as string) || undefined,
+        nowISO: clientNowISO,
+      }
+    );
+    let details = llmDetails
+      ? (() => {
+          const duration = llmDetails.duration_minutes || 60;
+          const date = llmDetails.date;
+          const [hStr, mStr] = llmDetails.start_time.split(':');
+          // Construct Date using the provided timezone and now reference to avoid off-by-one day
+          const tz =
+            timezone || (creds?.timezone as string) || 'America/Los_Angeles';
+          // Build a local date-time string and let Date parse as local, then we only use date/time components afterwards
+          const startLocal = new Date(
+            `${date}T${hStr.padStart(2, '0')}:${mStr.padStart(2, '0')}:00`
+          );
+          const startDate = startLocal;
+          // Build consistent shape with programmatic parser
+          const endHour = (parseInt(hStr, 10) + Math.floor(duration / 60))
+            .toString()
+            .padStart(2, '0');
+          const endMin = (parseInt(mStr, 10) + (duration % 60)) % 60;
+          const endTime = `${endHour}:${endMin.toString().padStart(2, '0')}`;
+          return {
+            service: llmDetails.service || 'hair appointment',
+            date,
+            start_time: `${hStr.padStart(2, '0')}:${mStr.padStart(2, '0')}`,
+            end_time: endTime,
+            hair_dresser: llmDetails.hair_dresser || 'Tom',
+            calendar_availability: 'available',
+            fullStartDateTime: startDate,
+          };
+        })()
+      : extractAppointmentDetails(userRequest);
 
     // Validate that we have a valid date
     if (!details.date || !details.fullStartDateTime) {
@@ -249,8 +510,14 @@ export async function bookAppointmentAgent(
     // 1. Check calendar for conflicts
     const calendarId = email || 'tps8327@gmail.com'; // use provided email or fallback
     const date = details.date;
-    const startISO = `${date}T${details.start_time}:00-07:00`;
-    const endISO = `${date}T${details.end_time}:00-07:00`;
+    const tz = timezone || (creds?.timezone as string) || 'America/Los_Angeles';
+    // Format requested slot into ISO with Z while respecting the user's timezone by first constructing local and then converting
+    const [sh, sm] = details.start_time.split(':').map((s) => parseInt(s, 10));
+    const [eh, em] = details.end_time.split(':').map((s) => parseInt(s, 10));
+    const startLocal = new Date(`${date}T${details.start_time}:00`);
+    const endLocal = new Date(`${date}T${details.end_time}:00`);
+    const startISO = startLocal.toISOString();
+    const endISO = endLocal.toISOString();
 
     onProgress?.({
       type: 'progress',
@@ -261,8 +528,10 @@ export async function bookAppointmentAgent(
       }...`,
     });
 
-    const events = await getEvents(creds, calendarId, startISO, endISO);
-    if (events && events.length > 0) {
+    const availability = await getAvailability(creds, startISO, endISO, [
+      calendarId,
+    ]);
+    if (availability && availability.available === false) {
       // Conflict: propose 3 alternatives
       const requestedDateTime = new Date(startISO);
       const duration =
@@ -295,13 +564,13 @@ export async function bookAppointmentAgent(
       for (let alt of alternatives) {
         const altStartISO = alt.start.toISOString();
         const altEndISO = alt.end.toISOString();
-        const altEvents = await getEvents(
+        const altAvailability = await getAvailability(
           creds,
-          calendarId,
           altStartISO,
-          altEndISO
+          altEndISO,
+          [calendarId]
         );
-        if (!altEvents || altEvents.length === 0) {
+        if (altAvailability && altAvailability.available) {
           availableAlternatives.push({
             ...alt,
             startISO: altStartISO,
@@ -329,37 +598,68 @@ export async function bookAppointmentAgent(
       };
     }
     // 2. Start the call
-    const vapiResponse = await axios.post(
-      'https://api.vapi.ai/call',
-      {
-        phoneNumberId: 'a301522e-1c53-44f4-9fbe-e5433a3256f6',
-        assistantId: '00d671c2-589c-4946-8cde-ad75b5009cbb',
-        customer: { number: '+16049108101' },
-        type: 'outboundPhoneCall',
-        assistant: {
-          voice: { provider: 'vapi', voiceId: 'Paige' },
-          firstMessage: `Hey I'd like to book a ${details.service} appointment`,
-          model: {
-            provider: 'openai',
-            model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content: `Diana is an intelligent personal assistant specializing in outbound calling and scheduling appointments. Ava’s task for this call is to book a ${details.service} for her client, Pavel, at Tomy Gun Barbershop. She will speak with a representative and follow these instructions:\n\n1. Preferred Appointment Time:\n   - Book an appointment between ${details.start_time} - ${details.end_time} on ${details.date}.\n   - If available, request ${details.hair_dresser} as the stylist. If they are unavailable, any other available stylist is fine.\n\n2. Availability Check:\n   - If no slots are available within the preferred timeframe, check for alternative openings outside of Pavel's calendar conflicts.\n   - Review Pavel's schedule here: ${details.calendar_availability} to ensure there are no conflicts before confirming the appointment.\n\n3. Confirmation Details:\n   - Confirm the date, time, and stylist name before finalizing.\n   - If no appointments are available, ask when the next earliest opening is and offer to book that instead.\n\n4. Closing the Call:\n   - Thank the representative for their time and confirm that Pavel will receive a reminder of the appointment.`,
-              },
-            ],
+    console.log('[bookAppointmentAgent] Using phone number for Vapi call:', {
+      inputPhone: phone,
+      normalizedPhone,
+    });
+    const vapiResponse = await axios
+      .post(
+        'https://api.vapi.ai/call',
+        {
+          phoneNumberId: 'a301522e-1c53-44f4-9fbe-e5433a3256f6',
+          assistantId: '00d671c2-589c-4946-8cde-ad75b5009cbb',
+          // customer: { number: '+17788713018' },
+          customer: { number: normalizedPhone },
+          type: 'outboundPhoneCall',
+          assistant: {
+            voice: { provider: 'vapi', voiceId: 'Paige' },
+            firstMessage: `Hey I'd like to book a ${details.service} appointment`,
+            model: {
+              provider: 'openai',
+              model: 'gpt-4o',
+              messages: [
+                {
+                  role: 'system',
+                  content: `Diana is an intelligent personal assistant specializing in outbound calling and scheduling appointments. Diana’s task for this call is to book a ${details.service} for her client, Pavel, at Tomy Gun Barbershop. She will speak with a representative and follow these instructions:\n\n1. Preferred Appointment Time:\n   - Book an appointment between ${details.start_time} - ${details.end_time} on ${details.date}.\n   - If available, request ${details.hair_dresser} as the stylist. If they are unavailable, any other available stylist is fine.\n\n2. Availability Check:\n   - If no slots are available within the preferred timeframe, check for alternative openings outside of Pavel's calendar conflicts.\n   - Review Pavel's schedule here: ${details.calendar_availability} to ensure there are no conflicts before confirming the appointment.\n\n3. Confirmation Details:\n   - Confirm the date, time, and stylist name before finalizing.\n   - If no appointments are available, ask when the next earliest opening is and offer to book that instead.\n\n4. Closing the Call:\n   - Thank the representative for their time and say that Pavel will receive a reminder of the appointment.`,
+                },
+              ],
+            },
           },
         },
-      },
-      {
-        headers: {
-          Authorization: 'Bearer 3981fd0c-e2f3-4200-a43d-107b6abf1680',
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+        {
+          headers: {
+            Authorization: 'Bearer 3981fd0c-e2f3-4200-a43d-107b6abf1680',
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+      .catch((err) => {
+        // Surface clearer error details when Vapi returns 4xx/5xx
+        const status = err?.response?.status;
+        const data = err?.response?.data;
+        const detail =
+          (typeof data === 'string' ? data : JSON.stringify(data)) ||
+          err.message;
+        throw new Error(
+          status
+            ? `Vapi call failed (${status}): ${detail}`
+            : `Vapi call failed: ${detail}`
+        );
+      });
     console.log('[vapiResponse] - ', vapiResponse.data);
     const callId = vapiResponse.data.id;
+    // Notify client about call status transitions
+    const statusLabelMap: Record<string, string> = {
+      ringing: 'Call ringing... ',
+      'in-progress': 'Call in progress...',
+      ended: 'Call ended.',
+      queued: 'Call queued...',
+      connecting: 'Connecting call...',
+    };
+    let lastStatus = (vapiResponse.data.status as string) || '';
+    if (lastStatus && statusLabelMap[lastStatus]) {
+      onProgress?.({ type: 'progress', content: statusLabelMap[lastStatus] });
+    }
     // 3. Poll for call completion
     let status = '';
     let transcript = '';
@@ -374,36 +674,53 @@ export async function bookAppointmentAgent(
       status = poll.data.status;
       transcript = poll.data.transcript;
       console.log('[poll] - ', poll.data);
+      if (status && status !== lastStatus && statusLabelMap[status]) {
+        onProgress?.({ type: 'progress', content: statusLabelMap[status] });
+        lastStatus = status;
+      }
     }
-    // 4. Validate call success before creating calendar event
-    const callValidation = validateCallSuccess(poll.data, transcript);
+    // 4. Decide booking outcome using LLM analysis of the call summary
+    const summaryText = poll.data?.summary || '';
+    const bookingDecision = await analyzeBookingOutcomeFromSummary(
+      summaryText,
+      details.start_time
+    );
 
-    if (!callValidation.success) {
+    if (!bookingDecision.success) {
       console.log(
-        '[bookAppointmentAgent] Call validation failed:',
-        callValidation
+        '[bookAppointmentAgent] Booking not successful:',
+        bookingDecision
       );
 
       onProgress?.({
         type: 'error',
-        content: `Failed to book appointment: ${callValidation.message}`,
+        content:
+          bookingDecision.reason && bookingDecision.reason.length > 0
+            ? `Booking not completed: ${bookingDecision.reason}`
+            : 'Booking not completed based on call results.',
       });
 
       return {
         error: true,
-        message: callValidation.message,
+        message:
+          bookingDecision.reason && bookingDecision.reason.length > 0
+            ? bookingDecision.reason
+            : 'Booking not completed based on call results.',
         appointment: null,
         transcript,
         callDetails: poll.data,
       };
     }
 
-    // 5. If confirmed, create calendar event using ACTUAL confirmed time from transcript
-    if (/confirm|booked|scheduled|appointment is set|yes/i.test(transcript)) {
+    // 5. Booking successful → create calendar event using ACTUAL confirmed time if provided
+    if (bookingDecision.success) {
       onProgress?.({ type: 'progress', content: 'Creating calendar event...' });
 
-      // Parse the ACTUAL confirmed time from the transcript
-      const actualTime = parseActualTimeFromTranscript(transcript);
+      // Prefer the decision's time; fallback to additional extractor
+      let actualTime = bookingDecision.time24;
+      if (!actualTime) {
+        actualTime = await extractConfirmedTimeFromSummary(summaryText);
+      }
       let actualStartISO = startISO; // Default to original if parsing fails
       let actualEndISO = endISO;
 
