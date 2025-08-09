@@ -603,12 +603,21 @@ export async function bookAppointmentAgent(
       inputPhone: phone,
       normalizedPhone,
     });
+    const vapiApiKey = process.env.VAPI_API_KEY;
+    const vapiPhoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+    const vapiAssistantId = process.env.VAPI_ASSISTANT_ID;
+    if (!vapiApiKey || !vapiPhoneNumberId || !vapiAssistantId) {
+      throw new Error(
+        'Vapi configuration missing. Please set VAPI_API_KEY, VAPI_PHONE_NUMBER_ID, and VAPI_ASSISTANT_ID.'
+      );
+    }
+
     const vapiResponse = await axios
       .post(
         'https://api.vapi.ai/call',
         {
-          phoneNumberId: 'a301522e-1c53-44f4-9fbe-e5433a3256f6',
-          assistantId: '00d671c2-589c-4946-8cde-ad75b5009cbb',
+          phoneNumberId: vapiPhoneNumberId,
+          assistantId: vapiAssistantId,
           // customer: { number: '+17788713018' },
           customer: { number: normalizedPhone },
           type: 'outboundPhoneCall',
@@ -647,7 +656,7 @@ export async function bookAppointmentAgent(
         },
         {
           headers: {
-            Authorization: 'Bearer 3981fd0c-e2f3-4200-a43d-107b6abf1680',
+            Authorization: `Bearer ${vapiApiKey}`,
             'Content-Type': 'application/json',
           },
         }

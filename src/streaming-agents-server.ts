@@ -1,5 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { z } from 'zod';
 import { runMainAgent } from './agents/mainAgent';
 import {
   ModernBookingAgent,
@@ -23,11 +26,55 @@ function removeTimezoneAbbreviations(content: string): string {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3060;
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+// Security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // not serving templated HTML here
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+// CORS allowlist
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // allow non-browser clients
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error('CORS blocked'));
+    },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
+  })
+);
+
+// Body size limit to reject oversized payloads
+app.use(express.json({ limit: '100kb' }));
+
+// Global rate limiter
+const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 600 });
+app.use(globalLimiter);
+
+// Basic WAF: block obvious scanners / suspicious UAs
+const blockedUAs = [/curl/i, /wget/i, /python-requests/i, /libwww-perl/i];
+app.use((req, res, next) => {
+  const ua = req.headers['user-agent'] || '';
+  if (blockedUAs.some((re) => re.test(String(ua)))) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+});
+
+// Additional heavy endpoint rate limits
+const sseLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 120 });
+const chatLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 240 });
 
 // In-memory conversation context with enhanced session data
 const conversationContexts = new Map<string, SessionContext>();
@@ -133,8 +180,61 @@ async function runEnhancedMainAgent(
   }
 }
 
+// Zod validation schemas
+const AccountSchema = z.object({
+  email: z.string().email(),
+  title: z.string().min(1),
+  creds: z.object({
+    access_token: z.string().min(1),
+    refresh_token: z.string().min(1),
+    expires_at: z.string().min(1),
+    client_id: z.string().min(1),
+  }),
+});
+
+const StreamBodySchema = z.object({
+  message: z.string().min(1).max(4000),
+  sessionId: z.string().min(1).max(200).optional(),
+  email: z.string().email().optional(),
+  name: z.string().min(1).max(200).optional(),
+  phone: z.string().min(6).max(32).optional(),
+  timezone: z.string().min(1).max(100).optional(),
+  clientNowISO: z.string().min(1).max(100).optional(),
+  primary_account: AccountSchema,
+  secondary_account: AccountSchema.nullable().optional(),
+});
+
+const ChatBodySchema = z.object({
+  message: z.string().min(1).max(4000),
+  sessionId: z.string().min(1).max(200).optional(),
+  email: z.string().email().optional(),
+  name: z.string().min(1).max(200).optional(),
+  primary_account: AccountSchema,
+  secondary_account: AccountSchema.nullable().optional(),
+});
+
+// Enforce JSON content-type on POST
+app.use((req, res, next) => {
+  if (req.method === 'POST') {
+    const ct = req.headers['content-type'] || '';
+    if (!String(ct).includes('application/json')) {
+      return res.status(415).json({ error: 'Unsupported Media Type' });
+    }
+  }
+  // Basic path anomaly block
+  const rawPath = req.url || '';
+  if (/\.\.|%2e%2e/i.test(rawPath)) {
+    return res.status(400).json({ error: 'Bad request' });
+  }
+  next();
+});
+
 // Streaming endpoint for multi-step agent responses
-app.post('/api/chat/stream', async (req, res) => {
+app.post('/api/chat/stream', sseLimiter, async (req, res) => {
+  const parse = StreamBodySchema.safeParse(req.body);
+  if (!parse.success) {
+    return res.status(400).json({ error: 'Invalid request body' });
+  }
   const {
     message,
     sessionId = 'default',
@@ -145,17 +245,9 @@ app.post('/api/chat/stream', async (req, res) => {
     clientNowISO,
     primary_account,
     secondary_account,
-  } = req.body;
+  } = parse.data;
 
-  if (!message) {
-    return res.status(400).json({ error: 'Message is required' });
-  }
-
-  if (!primary_account || !primary_account.email || !primary_account.creds) {
-    return res.status(400).json({
-      error: 'Primary account with email and credentials is required',
-    });
-  }
+  // Validation above ensures required fields
 
   // Set headers for Server-Sent Events
   res.writeHead(200, {
@@ -183,16 +275,8 @@ app.post('/api/chat/stream', async (req, res) => {
     context.userPhone = phone;
     context.userTimeZone = timezone || 'America/Los_Angeles';
     context.clientNowISO = clientNowISO;
-    console.log('[Streaming Server] Incoming phone from request body:', phone);
-    console.log('[Streaming Server] Incoming name from request body:', name);
-    console.log(
-      '[Streaming Server] Incoming timezone from request body:',
-      timezone
-    );
-    console.log(
-      '[Streaming Server] Incoming clientNowISO from request body:',
-      clientNowISO
-    );
+    // Avoid logging PII and secrets
+    console.log('[Streaming Server] Received stream request');
     console.log(
       '[Streaming Server] Session userPhone set to:',
       context.userPhone
@@ -205,8 +289,7 @@ app.post('/api/chat/stream', async (req, res) => {
     context.history.push({ role: 'user', content: message });
 
     console.log(
-      `[Streaming Server] Processing message for session ${sessionId}:`,
-      message
+      `[Streaming Server] Processing message for session ${sessionId}`
     );
     console.log(
       `[Streaming Server] Accounts: Primary (${primary_account.title}: ${
@@ -286,7 +369,11 @@ app.post('/api/chat/stream', async (req, res) => {
 });
 
 // Regular endpoint for backward compatibility
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', chatLimiter, async (req, res) => {
+  const parse = ChatBodySchema.safeParse(req.body);
+  if (!parse.success) {
+    return res.status(400).json({ error: 'Invalid request body' });
+  }
   const {
     message,
     sessionId = 'default',
@@ -294,17 +381,9 @@ app.post('/api/chat', async (req, res) => {
     name,
     primary_account,
     secondary_account,
-  } = req.body;
+  } = parse.data;
 
-  if (!message) {
-    return res.status(400).json({ error: 'Message is required' });
-  }
-
-  if (!primary_account || !primary_account.email || !primary_account.creds) {
-    return res.status(400).json({
-      error: 'Primary account with email and credentials is required',
-    });
-  }
+  // Validation above ensures required fields
 
   try {
     // Get or create conversation context
@@ -327,10 +406,7 @@ app.post('/api/chat', async (req, res) => {
     // Add current message to context
     context.history.push({ role: 'user', content: message });
 
-    console.log(
-      `[Server] Processing message for session ${sessionId}:`,
-      message
-    );
+    console.log(`[Server] Processing message for session ${sessionId}`);
     console.log(
       `[Server] Accounts: Primary (${primary_account.title}: ${
         primary_account.email

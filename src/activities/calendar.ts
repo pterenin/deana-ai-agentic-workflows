@@ -75,12 +75,7 @@ export async function getEvents(
       console.log('🔍 [getEvents] No events found - Debug info:');
       console.log('   📅 Query range:', { timeMin, timeMax });
       console.log('   📧 Calendar:', calendarId);
-      console.log(
-        '   🔑 Token preview:',
-        creds?.access_token
-          ? `${creds.access_token.substring(0, 15)}...`
-          : 'missing'
-      );
+      console.log('   🔑 Token: [redacted]');
     }
 
     return result;
