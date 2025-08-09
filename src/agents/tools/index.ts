@@ -13,6 +13,7 @@ import { conflictResolutionTools } from './conflictResolutionTools';
 import { emailTools } from './emailTools';
 import { appointmentIntegrationTools } from './appointmentIntegrationTools';
 import { callSummaryAccessTool } from './callSummaryAccessTool';
+import { webBrowseTools } from './webBrowseTools';
 import { sendEmail as sendEmailHandler } from '../handlers/sendEmailHandler';
 // General call tool (inline to avoid module resolution issues)
 const generalCallTools: ChatCompletionTool[] = [
@@ -77,4 +78,5 @@ export const allTools: ChatCompletionTool[] = [
   ...generalCallTools,
   callSummaryAccessTool,
   sendEmailTool,
+  ...webBrowseTools,
 ];

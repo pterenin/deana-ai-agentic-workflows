@@ -436,7 +436,8 @@ export async function bookAppointmentAgent(
   onProgress?: (update: any) => void,
   timezone?: string,
   clientNowISO?: string,
-  originalUserMessage?: string
+  originalUserMessage?: string,
+  userName?: string
 ) {
   try {
     console.log('[bookAppointmentAgent] invoked with phone:', phone);
@@ -620,7 +621,25 @@ export async function bookAppointmentAgent(
               messages: [
                 {
                   role: 'system',
-                  content: `Deana is an intelligent personal assistant specializing in outbound calling and scheduling appointments. Deana’s task for this call is to book a ${details.service} for her client, Pavel, at Tomy Gun Barbershop. She will speak with a representative and follow these instructions:\n\n1. Preferred Appointment Time:\n   - Book an appointment between ${details.start_time} - ${details.end_time} on ${details.date}.\n   - If available, request ${details.hair_dresser} as the stylist. If they are unavailable, any other available stylist is fine.\n\n2. Availability Check:\n   - If no slots are available within the preferred timeframe, check for alternative openings outside of Pavel's calendar conflicts.\n   - Review Pavel's schedule here: ${details.calendar_availability} to ensure there are no conflicts before confirming the appointment.\n\n3. Confirmation Details:\n   - Confirm the date, time, and stylist name before finalizing.\n   - If no appointments are available, ask when the next earliest opening is and offer to book that instead.\n\n4. Closing the Call:\n   - Thank the representative for their time and say that Pavel will receive a reminder of the appointment.`,
+                  content: `Deana is an intelligent personal assistant specializing in outbound calling and scheduling appointments. Deana’s task for this call is to book a ${
+                    details.service
+                  } for her client, ${
+                    userName || 'the client'
+                  }, at Tomy Gun Barbershop. She will speak with a representative and follow these instructions:\n\n1. Preferred Appointment Time:\n   - Book an appointment between ${
+                    details.start_time
+                  } - ${details.end_time} on ${
+                    details.date
+                  }.\n   - If available, request ${
+                    details.hair_dresser
+                  } as the stylist. If they are unavailable, any other available stylist is fine.\n\n2. Availability Check:\n   - If no slots are available within the preferred timeframe, check for alternative openings outside of ${
+                    userName || 'the client'
+                  }'s calendar conflicts.\n   - Review ${
+                    userName || 'the client'
+                  }'s schedule here: ${
+                    details.calendar_availability
+                  } to ensure there are no conflicts before confirming the appointment.\n\n3. Confirmation Details:\n   - Confirm the date, time, and stylist name before finalizing.\n   - If no appointments are available, ask when the next earliest opening is and offer to book that instead.\n\n4. Closing the Call:\n   - Thank the representative for their time and say that ${
+                    userName || 'the client'
+                  } will receive a reminder of the appointment.`,
                 },
               ],
             },

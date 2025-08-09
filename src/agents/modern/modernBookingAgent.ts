@@ -23,7 +23,8 @@ export class ModernBookingAgent {
     private phone?: string,
     private timezone?: string,
     private clientNowISO?: string,
-    private onProgress?: (update: any) => void
+    private onProgress?: (update: any) => void,
+    private userName?: string
   ) {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     console.log('[ModernBookingAgent] Initialized with', {
@@ -37,7 +38,8 @@ export class ModernBookingAgent {
       phone,
       timezone,
       clientNowISO,
-      onProgress
+      onProgress,
+      this.userName
     );
   }
 
@@ -176,6 +178,9 @@ export class ModernBookingAgent {
   private buildSystemPrompt(context: BookingAgentContext): string {
     const currentDate = new Date().toISOString().split('T')[0];
     const basePrompt = `You are a professional appointment booking assistant. Your role is to help users book appointments through a structured workflow.
+
+USER PROFILE:
+${this.userName ? `- User Name: ${this.userName}` : ''}
 
 **CRITICAL WORKFLOW RULES:**
 1. For new booking requests, ALWAYS use the 'bookAppointment' tool

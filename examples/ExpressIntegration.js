@@ -23,6 +23,7 @@ app.post('/api/chat/stream', async (req, res) => {
     message,
     sessionId = 'default',
     email,
+    name,
     primary_account,
     secondary_account,
   } = req.body;
@@ -32,11 +33,9 @@ app.post('/api/chat/stream', async (req, res) => {
   }
 
   if (!primary_account || !primary_account.email || !primary_account.creds) {
-    return res
-      .status(400)
-      .json({
-        error: 'Primary account with email and credentials is required',
-      });
+    return res.status(400).json({
+      error: 'Primary account with email and credentials is required',
+    });
   }
 
   // Store account information in session
@@ -56,6 +55,7 @@ app.post('/api/chat/stream', async (req, res) => {
     secondary: secondary_account || null,
   };
   session.userEmail = email;
+  session.userName = name;
 
   // Set headers for Server-Sent Events
   res.writeHead(200, {
@@ -77,6 +77,7 @@ app.post('/api/chat/stream', async (req, res) => {
         message,
         sessionId,
         email,
+        name,
         primary_account,
         secondary_account: secondary_account || null,
       }),
@@ -146,11 +147,9 @@ app.post('/api/chat', async (req, res) => {
   }
 
   if (!primary_account || !primary_account.email || !primary_account.creds) {
-    return res
-      .status(400)
-      .json({
-        error: 'Primary account with email and credentials is required',
-      });
+    return res.status(400).json({
+      error: 'Primary account with email and credentials is required',
+    });
   }
 
   // Store account information in session

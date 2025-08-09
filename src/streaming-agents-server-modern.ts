@@ -49,6 +49,9 @@ async function runEnhancedMainAgent(
     const modernBookingAgent = new ModernBookingAgent(
       creds,
       'primary',
+      undefined,
+      undefined,
+      undefined,
       onProgress
     );
     const result = await modernBookingAgent.processBookingRequest(

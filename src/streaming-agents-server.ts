@@ -100,7 +100,8 @@ async function runEnhancedMainAgent(
       context.userPhone,
       context.userTimeZone,
       context.clientNowISO,
-      onProgress
+      onProgress,
+      context.userName
     );
     const result = await modernBookingAgent.processBookingRequest(
       userMessage,
@@ -138,6 +139,7 @@ app.post('/api/chat/stream', async (req, res) => {
     message,
     sessionId = 'default',
     email,
+    name,
     phone,
     timezone,
     clientNowISO,
@@ -177,10 +179,12 @@ app.post('/api/chat/stream', async (req, res) => {
       secondary: secondary_account || null,
     };
     context.userEmail = email;
+    context.userName = name;
     context.userPhone = phone;
     context.userTimeZone = timezone || 'America/Los_Angeles';
     context.clientNowISO = clientNowISO;
     console.log('[Streaming Server] Incoming phone from request body:', phone);
+    console.log('[Streaming Server] Incoming name from request body:', name);
     console.log(
       '[Streaming Server] Incoming timezone from request body:',
       timezone
@@ -287,6 +291,7 @@ app.post('/api/chat', async (req, res) => {
     message,
     sessionId = 'default',
     email,
+    name,
     primary_account,
     secondary_account,
   } = req.body;
@@ -314,6 +319,7 @@ app.post('/api/chat', async (req, res) => {
       secondary: secondary_account || null,
     };
     context.userEmail = email;
+    context.userName = name;
     context.sessionId = sessionId;
 
     conversationContexts.set(sessionId, context);

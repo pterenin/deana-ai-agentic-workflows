@@ -8,7 +8,8 @@ export interface GeneralCallArgs {
 
 export async function runGeneralCall(
   args: GeneralCallArgs,
-  onProgress?: (u: any) => void
+  onProgress?: (u: any) => void,
+  userName?: string
 ) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -27,9 +28,21 @@ export async function runGeneralCall(
 
 Task: ${args.task}
 
+Caller context: ${
+    userName
+      ? `The assistant is calling on behalf of ${userName}.`
+      : 'The assistant is calling on behalf of the client.'
+  }
+
 Constraints:
 - Assistant name is Deana
 - Use a warm, professional tone
+- If a caller name is provided, the firstMessage MUST clearly say you are calling on behalf of ${
+    userName || 'the client'
+  }
+- The systemMessage MUST include that the caller/client name is ${
+    userName || 'the client'
+  } so downstream behavior reflects the correct identity
 - Return ONLY strict JSON with keys {"firstMessage": string, "systemMessage": string}
 - Do not include markdown or extra text`;
 
