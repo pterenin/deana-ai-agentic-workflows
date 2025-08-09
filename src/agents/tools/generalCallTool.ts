@@ -60,11 +60,20 @@ Constraints:
 
   onProgress?.({ type: 'progress', content: 'Starting phone call...' });
 
+  const vapiApiKey = process.env.VAPI_API_KEY;
+  const vapiPhoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+  const vapiAssistantId = process.env.VAPI_ASSISTANT_ID;
+  if (!vapiApiKey || !vapiPhoneNumberId || !vapiAssistantId) {
+    throw new Error(
+      'Vapi configuration missing for general call. Please set VAPI_API_KEY, VAPI_PHONE_NUMBER_ID, and VAPI_ASSISTANT_ID_GENERAL (or VAPI_ASSISTANT_ID).'
+    );
+  }
+
   const startResp = await axios.post(
     'https://api.vapi.ai/call',
     {
-      phoneNumberId: 'a301522e-1c53-44f4-9fbe-e5433a3256f6',
-      assistantId: 'fc5a5e7c-e97f-4c6f-b682-d6c57f21a359',
+      phoneNumberId: vapiPhoneNumberId,
+      assistantId: vapiAssistantId,
       customer: { number: sanitizedPhone },
       type: 'outboundPhoneCall',
       assistant: {
@@ -79,7 +88,7 @@ Constraints:
     },
     {
       headers: {
-        Authorization: 'Bearer 3981fd0c-e2f3-4200-a43d-107b6abf1680',
+        Authorization: `Bearer ${vapiApiKey}`,
         'Content-Type': 'application/json',
       },
     }
