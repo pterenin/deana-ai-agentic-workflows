@@ -186,10 +186,17 @@ const getEventsMultiAccount = async (
     const userMessage =
       context.history[context.history.length - 1]?.content || '';
 
+    const hasUsableSecondary = !!(
+      context.accounts.secondary &&
+      context.accounts.secondary.email &&
+      context.accounts.secondary.creds &&
+      context.accounts.secondary.creds.access_token
+    );
+
     console.log('🔍 [getEventsMultiAccount] DEBUG INFO:');
     console.log('  User message:', userMessage);
     console.log('  Args calendarId:', args.calendarId);
-    console.log('  Has secondary account:', !!context.accounts.secondary);
+    console.log('  Has secondary account:', hasUsableSecondary);
     console.log('  Primary title:', context.accounts.primary.title);
     console.log('  Secondary title:', context.accounts.secondary?.title);
 
@@ -204,8 +211,8 @@ const getEventsMultiAccount = async (
       console.log(
         '🚨 [SAFETY] AI passed email for broad query - overriding to check both calendars'
       );
-      // Only force multi if a secondary account exists; otherwise, keep primary
-      calendarIdToUse = context.accounts.secondary
+      // Only force multi if a usable secondary exists; otherwise, keep primary
+      calendarIdToUse = hasUsableSecondary
         ? undefined
         : context.accounts.primary.email;
     }
@@ -227,7 +234,7 @@ const getEventsMultiAccount = async (
     );
 
     if (targetAccount === 'both') {
-      if (!context.accounts.secondary) {
+      if (!hasUsableSecondary) {
         // Safety: if no secondary, fall back to primary-only
         onProgress?.({
           type: 'progress',
@@ -282,13 +289,15 @@ const getEventsMultiAccount = async (
           args.timeMin,
           args.timeMax
         ),
-        fetchEventsSafe(
-          context.accounts.secondary.title,
-          context.accounts.secondary.creds,
-          context.accounts.secondary.email,
-          args.timeMin,
-          args.timeMax
-        ),
+        context.accounts.secondary && hasUsableSecondary
+          ? fetchEventsSafe(
+              context.accounts.secondary.title,
+              context.accounts.secondary.creds,
+              context.accounts.secondary.email,
+              args.timeMin,
+              args.timeMax
+            )
+          : Promise.resolve({ events: [], error: null }),
       ]);
 
       const primaryEvents = primaryRes.events || [];
@@ -302,11 +311,15 @@ const getEventsMultiAccount = async (
           ? `Found ${primaryCount} events in your ${
               context.accounts.primary.title
             } calendar. Your ${
-              context.accounts.secondary.title
+              context.accounts.secondary?.title || 'secondary'
             } calendar could not be fetched (${
               secondaryRes.error?.message || 'error'
             }).`
-          : `Found ${primaryCount} events in your ${context.accounts.primary.title} calendar and ${secondaryCount} events in your ${context.accounts.secondary.title} calendar`,
+          : `Found ${primaryCount} events in your ${
+              context.accounts.primary.title
+            } calendar and ${secondaryCount} events in your ${
+              context.accounts.secondary?.title || 'secondary'
+            } calendar`,
       });
 
       // Check for conflicts between calendars
@@ -345,13 +358,17 @@ const getEventsMultiAccount = async (
             events: primaryEvents,
             count: primaryCount,
           },
-          secondary: {
-            title: context.accounts.secondary.title,
-            email: context.accounts.secondary.email,
-            events: secondaryEvents,
-            count: secondaryCount,
-            error: secondaryRes.error ? secondaryRes.error.message : undefined,
-          },
+          secondary: context.accounts.secondary
+            ? {
+                title: context.accounts.secondary.title,
+                email: context.accounts.secondary.email,
+                events: secondaryEvents,
+                count: secondaryCount,
+                error: secondaryRes.error
+                  ? secondaryRes.error.message
+                  : undefined,
+              }
+            : null,
         },
         // ✨ Make conflict details available to AI for rescheduling
         conflictDetails:

@@ -362,7 +362,11 @@ export async function runMainAgent(
           creds,
           email,
           context?.userPhone,
-          onProgress
+          onProgress,
+          context?.userTimeZone,
+          context?.clientNowISO,
+          userMessage,
+          context?.userName
         );
         if (result.conflict) {
           // Still a conflict (should be rare)
@@ -418,7 +422,11 @@ export async function runMainAgent(
       creds,
       email,
       context?.userPhone,
-      onProgress
+      onProgress,
+      context?.userTimeZone,
+      context?.clientNowISO,
+      userMessage,
+      context?.userName
     );
 
     // Handle errors from booking agent
@@ -480,6 +488,28 @@ export async function runMainAgent(
         content: getMainAgentPrompt(dateContext),
       },
     ];
+    // Inject user profile context so the agent can answer questions like "What is my name?"
+    if (
+      context?.userName ||
+      context?.userEmail ||
+      context?.userPhone ||
+      context?.userTimeZone
+    ) {
+      const profileLines = [
+        context?.userName ? `- User Name: ${context.userName}` : null,
+        context?.userEmail ? `- User Email: ${context.userEmail}` : null,
+        context?.userPhone ? `- User Phone: ${context.userPhone}` : null,
+        context?.userTimeZone
+          ? `- User Timezone: ${context.userTimeZone}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      messages.unshift({
+        role: 'system',
+        content: `USER PROFILE:\n${profileLines}`,
+      });
+    }
     if (context?.history) {
       // Filter out messages with null/undefined content to prevent OpenAI errors
       const validHistory = context.history.filter(
@@ -709,12 +739,15 @@ export async function runMainAgent(
               'rescheduleEvent',
               'proposeRescheduleOptions',
               'checkTimeSlotAvailability',
+              'placeGeneralCall',
               'askWhichEmailAccount',
               'sendEmailWithAccount',
               'findContactInAccount',
               'parseCallSummaryForBooking',
               'createEventFromCallBooking',
               'getRecentCallSummary',
+              'webSearch',
+              'webGet',
             ];
             const supportsContext =
               contextSupportedFunctions.includes(functionName);
@@ -735,14 +768,23 @@ export async function runMainAgent(
               role: 'tool' as const,
               content: JSON.stringify(result),
             });
-            // If the tool result is an error or needs user input, break and return
+            // If the tool result is an error or needs user input, handle gracefully
             if (result && (result.error || result.needsUserInput)) {
-              return {
-                content:
-                  result.message ||
-                  'There was an issue processing your request.',
-                toolResults,
-              };
+              // Non-fatal for web browsing tools: allow the agent to answer without live data
+              const nonFatalTools = new Set(['webSearch', 'webGet']);
+              if (!nonFatalTools.has(functionName)) {
+                return {
+                  content:
+                    result.message ||
+                    'There was an issue processing your request.',
+                  toolResults,
+                };
+              }
+              // For webSearch/webGet failures, continue reasoning without early return
+              onProgress?.({
+                type: 'progress',
+                content: `Continuing without live web data due to a temporary issue.`,
+              });
             }
           } else {
             return {

@@ -14,6 +14,7 @@ import { appointmentIntegrationHandlers } from './appointmentIntegrationHandlers
 import { callSummaryAccessHandler } from './callSummaryAccessHandler';
 import { sendEmail } from './sendEmailHandler';
 import { placeGeneralCallHandler } from '../tools/generalCallTools';
+import { webBrowseHandlers } from './webBrowseHandlers';
 
 export const allHandlers = {
   ...calendarHandlers,
@@ -24,4 +25,5 @@ export const allHandlers = {
   ...callSummaryAccessHandler,
   placeGeneralCall: placeGeneralCallHandler,
   sendEmail,
+  ...webBrowseHandlers,
 };

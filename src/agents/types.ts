@@ -19,6 +19,7 @@ export interface SessionContext {
     secondary: AccountInfo | null;
   };
   userEmail?: string;
+  userName?: string;
   userPhone?: string;
   userTimeZone?: string;
   clientNowISO?: string;

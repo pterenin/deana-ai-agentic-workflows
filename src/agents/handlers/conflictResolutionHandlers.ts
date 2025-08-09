@@ -325,12 +325,19 @@ Which option would you prefer, or would you like to suggest a different time?`,
           [context.accounts.primary.email]
         );
 
-        const secondaryCheck = context.accounts.secondary
+        const hasUsableSecondary = !!(
+          context.accounts.secondary &&
+          context.accounts.secondary.email &&
+          context.accounts.secondary.creds &&
+          (context.accounts.secondary.creds as any).access_token
+        );
+
+        const secondaryCheck = hasUsableSecondary
           ? await getAvailability(
-              context.accounts.secondary.creds,
+              context.accounts.secondary!.creds,
               normalizedStart,
               normalizedEnd,
-              [context.accounts.secondary.email]
+              [context.accounts.secondary!.email]
             )
           : { available: true };
 
@@ -377,16 +384,29 @@ Which option would you prefer, or would you like to suggest a different time?`,
             resolvedCalendarEmail
           );
         } else {
-          console.log(
-            '🔧 [DEBUG] ⚠️  No matching calendar found for:',
-            args.calendarEmail
-          );
-          console.log('🔧 [DEBUG] Available calendars:');
-          console.log('🔧 [DEBUG] - Primary:', context.accounts.primary.email);
-          console.log(
-            '🔧 [DEBUG] - Secondary:',
-            context.accounts.secondary?.email || 'none'
-          );
+          // Fallback: if only primary exists, force to primary
+          if (!context.accounts.secondary) {
+            resolvedCalendarEmail = context.accounts.primary.email;
+            targetCreds = context.accounts.primary.creds;
+            console.log(
+              '🔧 [DEBUG] Forcing calendar to PRIMARY (single-account):',
+              resolvedCalendarEmail
+            );
+          } else {
+            console.log(
+              '🔧 [DEBUG] ⚠️  No matching calendar found for:',
+              args.calendarEmail
+            );
+            console.log('🔧 [DEBUG] Available calendars:');
+            console.log(
+              '🔧 [DEBUG] - Primary:',
+              context.accounts.primary.email
+            );
+            console.log(
+              '🔧 [DEBUG] - Secondary:',
+              context.accounts.secondary?.email || 'none'
+            );
+          }
         }
       }
 
@@ -413,12 +433,35 @@ Which option would you prefer, or would you like to suggest a different time?`,
             content: 'Locating the exact event to reschedule...',
           });
 
-          const dayEvents = await getEvents(
-            targetCreds,
-            resolvedCalendarEmail,
-            timeMinISO,
-            timeMaxISO
-          );
+          let dayEvents: any[] = [];
+          try {
+            dayEvents = await getEvents(
+              targetCreds,
+              resolvedCalendarEmail,
+              timeMinISO,
+              timeMaxISO
+            );
+          } catch (e) {
+            // If the chosen calendar fails, try primary as a fallback
+            if (
+              context?.accounts?.primary?.email &&
+              resolvedCalendarEmail !== context.accounts.primary.email
+            ) {
+              console.warn(
+                '⚠️ [DEBUG] Retry event search with PRIMARY calendar'
+              );
+              dayEvents = await getEvents(
+                context.accounts.primary.creds,
+                context.accounts.primary.email,
+                timeMinISO,
+                timeMaxISO
+              );
+              resolvedCalendarEmail = context.accounts.primary.email;
+              targetCreds = context.accounts.primary.creds;
+            } else {
+              throw e;
+            }
+          }
 
           const requestedLower = (args.eventSummary || '').toLowerCase();
 

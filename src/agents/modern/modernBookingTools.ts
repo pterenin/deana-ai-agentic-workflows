@@ -85,7 +85,8 @@ export class ModernBookingToolExecutor {
     private phone?: string,
     private timezone?: string,
     private clientNowISO?: string,
-    private onProgress?: (update: any) => void
+    private onProgress?: (update: any) => void,
+    private userName?: string
   ) {}
 
   // Will be set by ModernBookingAgent before executing tools
@@ -136,7 +137,8 @@ export class ModernBookingToolExecutor {
         this.onProgress,
         this.timezone,
         this.clientNowISO,
-        this.originalUserMessage
+        this.originalUserMessage,
+        this.userName
       );
 
       if (result.error) {
@@ -250,7 +252,8 @@ export class ModernBookingToolExecutor {
         this.onProgress,
         this.timezone,
         this.clientNowISO,
-        this.originalUserMessage
+        this.originalUserMessage,
+        this.userName
       );
 
       if (result.error) {

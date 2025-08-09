@@ -78,6 +78,9 @@ app.get('/api/chat/stream', async (req, res) => {
     const bookingAgent = new ModernBookingAgent(
       mockCredentials,
       'primary',
+      undefined,
+      undefined,
+      undefined,
       onProgress
     );
 
