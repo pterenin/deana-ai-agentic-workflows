@@ -1,6 +1,0 @@
-🚀 Enhanced Streaming Server running on port 3060
-📡 SSE endpoint: http://localhost:3060/api/chat/stream
-📡 Regular endpoint: http://localhost:3060/api/chat
-🎯 Enhanced with Modern Booking Agent Integration
-✅ Workflow: Booking Intent → Modern Agent → Voice Call → Calendar Event
-🔧 Non-booking requests use original main agent
