@@ -481,7 +481,10 @@ export async function runMainAgent(
       content: 'Initializing agent...',
       data: { step: 'init', total: 5 },
     });
-    const dateContext = getCurrentDateContext();
+    const dateContext = getCurrentDateContext(
+      context?.userTimeZone,
+      context?.clientNowISO
+    );
     const messages: any[] = [
       {
         role: 'system',

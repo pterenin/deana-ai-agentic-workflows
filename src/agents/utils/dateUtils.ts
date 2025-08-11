@@ -1,28 +1,34 @@
-// Helper function to get current date context
-export function getCurrentDateContext() {
-  const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
+import { DateTime } from 'luxon';
 
-  // Calculate next week end (Sunday of next week)
-  const nextWeekEnd = new Date(now);
-  const daysUntilNextSunday = (7 - nextWeekEnd.getDay()) % 7;
-  if (daysUntilNextSunday === 0) {
-    nextWeekEnd.setDate(nextWeekEnd.getDate() + 7); // If today is Sunday, go to next Sunday
-  } else {
-    nextWeekEnd.setDate(nextWeekEnd.getDate() + daysUntilNextSunday);
+// Helper function to get current date context in a specific IANA timezone
+// If clientNowISO is provided, we anchor calculations to the client-reported time.
+export function getCurrentDateContext(
+  userTimeZone?: string,
+  clientNowISO?: string
+) {
+  const tz = userTimeZone || 'America/Los_Angeles';
+  let now = clientNowISO
+    ? DateTime.fromISO(clientNowISO, { zone: tz })
+    : DateTime.now().setZone(tz);
+  if (!now.isValid) {
+    now = DateTime.now().setZone(tz);
   }
 
-  // Use local time instead of UTC to avoid timezone issues
-  const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD format
-  const tomorrowStr = tomorrow.toLocaleDateString('en-CA'); // YYYY-MM-DD format
-  const yesterdayStr = yesterday.toLocaleDateString('en-CA'); // YYYY-MM-DD format
-  const nextWeekEndStr = nextWeekEnd.toLocaleDateString('en-CA'); // YYYY-MM-DD format
+  const tomorrow = now.plus({ days: 1 });
+  const yesterday = now.minus({ days: 1 });
+
+  // Next Sunday relative to "now" in the user's timezone
+  const weekday = now.weekday; // 1 (Mon) - 7 (Sun)
+  const daysUntilNextSunday = weekday === 7 ? 7 : 7 - weekday;
+  const nextWeekEnd = now.plus({ days: daysUntilNextSunday }).startOf('day');
+
+  const todayStr = now.toFormat('yyyy-LL-dd');
+  const tomorrowStr = tomorrow.toFormat('yyyy-LL-dd');
+  const yesterdayStr = yesterday.toFormat('yyyy-LL-dd');
+  const nextWeekEndStr = nextWeekEnd.toFormat('yyyy-LL-dd');
 
   console.log(
-    `[Date Context] Current date: ${todayStr}, Tomorrow: ${tomorrowStr}, Yesterday: ${yesterdayStr}, Next Week End: ${nextWeekEndStr}`
+    `[Date Context] tz=${tz} now=${now.toISO()} → today=${todayStr} tomorrow=${tomorrowStr} yesterday=${yesterdayStr} nextWeekEnd=${nextWeekEndStr}`
   );
 
   return {
@@ -30,6 +36,6 @@ export function getCurrentDateContext() {
     tomorrow: tomorrowStr,
     yesterday: yesterdayStr,
     nextWeekEnd: nextWeekEndStr,
-    currentTime: now.toISOString(),
+    currentTime: now.toISO(),
   };
 }
