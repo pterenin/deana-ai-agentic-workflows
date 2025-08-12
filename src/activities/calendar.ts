@@ -9,9 +9,10 @@ function makeOauthClient(creds: {
   const clientId = process.env.GOOGLE_CLIENT_ID!;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI!;
+  // Avoid logging secrets; only log existence
   console.log('[makeOauthClient] Using:', {
-    clientId,
-    clientSecret,
+    clientId: clientId ? '[present]' : '[missing]',
+    clientSecret: clientSecret ? '[present]' : '[missing]',
     redirectUri,
   });
   const auth = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
@@ -31,6 +32,19 @@ export async function getEvents(
   timeMin: string,
   timeMax: string
 ): Promise<any[]> {
+  // Defensive: ensure RFC3339 format to avoid Google 400 errors
+  function ensureRfc3339Local(dt: string): string {
+    if (/Z$|[+-]\d{2}:\d{2}$/.test(dt)) return dt;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dt)) return `${dt}T00:00:00Z`;
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dt)) {
+      const withSeconds = dt.match(/:\d{2}$/) ? dt : `${dt}:00`;
+      return `${withSeconds}Z`;
+    }
+    const parsed = new Date(dt);
+    return isNaN(parsed.getTime()) ? dt : parsed.toISOString();
+  }
+  timeMin = ensureRfc3339Local(timeMin);
+  timeMax = ensureRfc3339Local(timeMax);
   console.log('🔍 [getEvents] Starting with params:', {
     calendarId,
     timeMin,
@@ -303,6 +317,19 @@ export async function getAvailability(
   available: boolean;
   busyPeriods: Array<{ start: string; end: string; calendar: string }>;
 }> {
+  // Defensive: ensure RFC3339 format to avoid Google 400 errors
+  function ensureRfc3339Local(dt: string): string {
+    if (/Z$|[+-]\d{2}:\d{2}$/.test(dt)) return dt;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dt)) return `${dt}T00:00:00Z`;
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dt)) {
+      const withSeconds = dt.match(/:\d{2}$/) ? dt : `${dt}:00`;
+      return `${withSeconds}Z`;
+    }
+    const parsed = new Date(dt);
+    return isNaN(parsed.getTime()) ? dt : parsed.toISOString();
+  }
+  timeMin = ensureRfc3339Local(timeMin);
+  timeMax = ensureRfc3339Local(timeMax);
   console.log('🔍 [getAvailability] Starting with params:', {
     timeMin,
     timeMax,

@@ -87,6 +87,26 @@ function findEventsToDelete(events: any[], userRequest: string): any[] {
   return matchingEvents;
 }
 
+// Helper: detect explicit rescheduling intent in the last user message
+function userWantsReschedule(message: string | undefined): boolean {
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return (
+    /\b(reschedul|move|push|delay|earlier|later|change\s+(the\s+)?time|shift)\b/.test(
+      m
+    ) || /\b(rebook|rearrange|postpone|bring forward|bump)\b/.test(m)
+  );
+}
+
+function getLastUserMessage(
+  messages: Array<{ role: string; content?: string }>
+): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return messages[i].content;
+  }
+  return undefined;
+}
+
 // Helper function to find event to reschedule based on user request
 function findEventToReschedule(events: any[], userRequest: string): any | null {
   const requestLower = userRequest.toLowerCase();
@@ -754,6 +774,20 @@ export async function runMainAgent(
             ];
             const supportsContext =
               contextSupportedFunctions.includes(functionName);
+
+            // Guardrails: only allow rescheduling tools if user expressed rescheduling intent
+            const lastUserMsg = getLastUserMessage(messages as any);
+            const isRescheduleTool =
+              functionName === 'rescheduleEvent' ||
+              functionName === 'proposeRescheduleOptions';
+            if (isRescheduleTool && !userWantsReschedule(lastUserMsg)) {
+              onProgress?.({
+                type: 'progress',
+                content:
+                  'Skipping rescheduling actions since the user did not request rescheduling.',
+              });
+              continue;
+            }
 
             const result = supportsContext
               ? await (

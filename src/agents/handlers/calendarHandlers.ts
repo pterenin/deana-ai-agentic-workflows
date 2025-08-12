@@ -9,6 +9,78 @@ import { findContactEmailByName } from '../../activities/contacts';
 
 import { AccountInfo, SessionContext } from '../types';
 
+// Ensure times are RFC3339 (Google Calendar requirement). If missing timezone, append Z
+function ensureRfc3339(dateTime: string | undefined): string | undefined {
+  if (!dateTime) return dateTime;
+  // Already has timezone info (Z or "+/-HH:MM")
+  if (/Z$|[+-]\d{2}:\d{2}$/.test(dateTime)) return dateTime;
+  // If it's a plain date (YYYY-MM-DD), convert to start of day UTC
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateTime)) return `${dateTime}T00:00:00Z`;
+  // If it's a datetime without timezone, append Z
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dateTime)) {
+    // Normalize to include seconds
+    const withSeconds = dateTime.match(/:\d{2}$/) ? dateTime : `${dateTime}:00`;
+    return `${withSeconds}Z`;
+  }
+  // Fallback: try to parse and re-ISO
+  const parsed = new Date(dateTime);
+  if (!isNaN(parsed.getTime())) return parsed.toISOString();
+  return dateTime;
+}
+
+// Detect if the user asked a non-specific period query (today/this week/month/year or generic month/week/year)
+function isNonSpecificPeriodQuery(userMessage: string): boolean {
+  const msg = (userMessage || '').toLowerCase();
+  // Cover misspellings like "months"
+  return /\b(today|this week|this month|this year|week|month|year|\d{4})\b/.test(
+    msg
+  );
+}
+
+// Detect if user explicitly requested the beginning of the period
+function mentionsBeginningOfPeriod(userMessage: string): boolean {
+  const msg = (userMessage || '').toLowerCase();
+  return /\b(from the beginning|from start|since the beginning|start of (the )?(day|week|month|year))\b/.test(
+    msg
+  );
+}
+
+// Filter out events that ended before now, preserving ongoing and future events
+function filterToOngoingAndFuture(events: any[], now: Date): any[] {
+  return (events || []).filter((event) => {
+    const endDateTime = event?.end?.dateTime || null;
+    const endDate = event?.end?.date || null; // all-day events use date (exclusive end)
+    let eventEnd: Date | null = null;
+    if (endDateTime) {
+      const parsed = new Date(endDateTime);
+      eventEnd = isNaN(parsed.getTime()) ? null : parsed;
+    } else if (endDate) {
+      const parsed = new Date(endDate);
+      eventEnd = isNaN(parsed.getTime()) ? null : parsed;
+    }
+    // If cannot parse end, keep it just in case
+    if (!eventEnd) return true;
+    return eventEnd >= now;
+  });
+}
+
+// Annotate events with isOngoing flag based on current time
+function annotateOngoing(events: any[], now: Date): any[] {
+  return (events || []).map((event) => {
+    const startDT = event?.start?.dateTime || null;
+    const endDT = event?.end?.dateTime || null;
+    let isOngoing = false;
+    if (startDT && endDT) {
+      const start = new Date(startDT);
+      const end = new Date(endDT);
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        isOngoing = start <= now && now < end;
+      }
+    }
+    return { ...event, isOngoing };
+  });
+}
+
 // Helper function to detect conflicts between calendar events
 function detectConflicts(
   primaryEvents: any[],
@@ -89,7 +161,7 @@ function determineTargetAccount(
   const isScheduleOverviewQuery = userMessage
     .toLowerCase()
     .match(
-      /(how.*week|what.*week|my week|what.*schedule|my schedule|list.*meetings|meetings.*week|week.*looks|schedule.*looks|next.*weeks|this week)/
+      /(how.*week|what.*week|my week|what.*schedule|my schedule|list.*meetings|meetings.*week|week.*looks|schedule.*looks|next.*weeks|this week|this month|next month|meetings.*month|september|october|november|december|january|february|march|april|may|june|july|august)/
     );
 
   const hasNoCalendarMention = !userMessage
@@ -217,6 +289,22 @@ const getEventsMultiAccount = async (
         : context.accounts.primary.email;
     }
 
+    // Clamp timeMin to NOW for non-specific period queries, unless user asks for beginning of period
+    if (
+      args?.timeMin &&
+      isNonSpecificPeriodQuery(userMessage) &&
+      !mentionsBeginningOfPeriod(userMessage)
+    ) {
+      const nowIso = new Date().toISOString();
+      if (new Date(args.timeMin) < new Date(nowIso)) {
+        console.log(
+          '🕒 [timeRange] Clamping timeMin to now for non-specific query:',
+          { before: args.timeMin, now: nowIso }
+        );
+        args.timeMin = nowIso;
+      }
+    }
+
     const targetAccount = determineTargetAccount(
       userMessage,
       context.accounts,
@@ -300,10 +388,20 @@ const getEventsMultiAccount = async (
           : Promise.resolve({ events: [], error: null }),
       ]);
 
-      const primaryEvents = primaryRes.events || [];
-      const secondaryEvents = secondaryRes.events || [];
+      let primaryEvents = primaryRes.events || [];
+      let secondaryEvents = secondaryRes.events || [];
       const primaryCount = primaryEvents.length;
       const secondaryCount = secondaryEvents.length;
+
+      // Apply filtering for non-specific period queries: show only ongoing/future
+      const now = new Date();
+      if (
+        isNonSpecificPeriodQuery(userMessage) &&
+        !mentionsBeginningOfPeriod(userMessage)
+      ) {
+        primaryEvents = filterToOngoingAndFuture(primaryEvents, now);
+        secondaryEvents = filterToOngoingAndFuture(secondaryEvents, now);
+      }
 
       onProgress?.({
         type: 'progress',
@@ -323,6 +421,11 @@ const getEventsMultiAccount = async (
       });
 
       // Check for conflicts between calendars
+      // Annotate ongoing status for response rendering
+      const nowForFlags = new Date();
+      primaryEvents = annotateOngoing(primaryEvents, nowForFlags);
+      secondaryEvents = annotateOngoing(secondaryEvents, nowForFlags);
+
       const conflicts = detectConflicts(
         primaryEvents,
         secondaryEvents,
@@ -401,12 +504,24 @@ const getEventsMultiAccount = async (
         content: `Fetching events from your ${targetAccount.title} calendar...`,
       });
       try {
-        const events = await getEvents(
+        let events = await getEvents(
           targetAccount.creds,
           targetAccount.email,
-          args.timeMin,
-          args.timeMax
+          ensureRfc3339(args.timeMin)!,
+          ensureRfc3339(args.timeMax)!
         );
+
+        // Apply filtering for non-specific period queries: show only ongoing/future
+        const now = new Date();
+        if (
+          isNonSpecificPeriodQuery(userMessage) &&
+          !mentionsBeginningOfPeriod(userMessage)
+        ) {
+          events = filterToOngoingAndFuture(events, now);
+        }
+
+        // Annotate ongoing status
+        events = annotateOngoing(events, new Date());
 
         onProgress?.({
           type: 'progress',
@@ -427,6 +542,38 @@ const getEventsMultiAccount = async (
           `⚠️ [getEventsMultiAccount] Failed to fetch ${targetAccount.title} calendar:`,
           message
         );
+        // If specific account fails and there is a secondary available, try fallback once
+        if (
+          context.accounts.secondary &&
+          targetAccount.email === context.accounts.primary.email
+        ) {
+          try {
+            onProgress?.({
+              type: 'progress',
+              content: `Primary calendar fetch failed (${message}). Trying your ${context.accounts.secondary.title} calendar...`,
+            });
+            const fallbackEvents = await getEvents(
+              context.accounts.secondary.creds,
+              context.accounts.secondary.email,
+              ensureRfc3339(args.timeMin)!,
+              ensureRfc3339(args.timeMax)!
+            );
+            return {
+              events: fallbackEvents,
+              count: fallbackEvents.length,
+              account: {
+                title: context.accounts.secondary.title,
+                email: context.accounts.secondary.email,
+              },
+              warning: `Primary calendar failed with: ${message}. Showing results from ${context.accounts.secondary.title} calendar instead`,
+            };
+          } catch (fallbackErr: any) {
+            console.error(
+              `⚠️ [getEventsMultiAccount] Fallback to secondary failed as well:`,
+              fallbackErr?.message || fallbackErr
+            );
+          }
+        }
         const requiresReauth =
           message.includes('invalid_grant') ||
           e?.response?.data?.error === 'invalid_grant';
@@ -496,7 +643,13 @@ export const calendarHandlers = {
       // If we have session context with multiple accounts, use the enhanced handler
       if (context?.accounts) {
         console.log('🚨 [getEvents] ✅ Using MULTI-ACCOUNT handler');
-        return await getEventsMultiAccount(args, context, onProgress);
+        // Sanitize time range before passing down
+        const sanitizedArgs = {
+          ...args,
+          timeMin: ensureRfc3339(args.timeMin),
+          timeMax: ensureRfc3339(args.timeMax),
+        };
+        return await getEventsMultiAccount(sanitizedArgs, context, onProgress);
       }
 
       // Legacy single-account handling
@@ -518,8 +671,8 @@ export const calendarHandlers = {
       const events = await getEvents(
         creds,
         args.calendarId,
-        args.timeMin,
-        args.timeMax
+        ensureRfc3339(args.timeMin)!,
+        ensureRfc3339(args.timeMax)!
       );
 
       onProgress?.({
@@ -913,6 +1066,106 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
     );
 
     try {
+      // Helper to judge whether an ID looks like a real Google Calendar event ID
+      const looksLikeGoogleEventId = (id: string | undefined): boolean => {
+        if (!id) return false;
+        // Typical Google event IDs are lowercase base32-ish strings, often 10+ chars.
+        // Reject purely numeric, very short, or strings with spaces/uppercase.
+        if (/^\d+$/.test(id)) return false;
+        if (id.length < 8) return false;
+        if (/\s/.test(id)) return false;
+        if (/[A-Z]/.test(id)) return false;
+        return /^[a-z0-9_-]+$/.test(id);
+      };
+
+      // If the eventId is missing or suspicious, try to infer it from recent context
+      if (!looksLikeGoogleEventId(args?.eventId) && context?.history) {
+        try {
+          const recentMessages = context.history.slice(-20);
+          const userMessage = recentMessages
+            .slice()
+            .reverse()
+            .find((m: any) => m.role === 'user')?.content as string | undefined;
+          const assistantMessage = recentMessages
+            .slice()
+            .reverse()
+            .find((m: any) => m.role === 'assistant')?.content as
+            | string
+            | undefined;
+
+          // Gather recent events from the latest tool results containing an events array
+          const candidateEvents: any[] = [];
+          for (let i = recentMessages.length - 1; i >= 0; i--) {
+            const m = recentMessages[i];
+            if (m.role === 'tool' && typeof m.content === 'string') {
+              try {
+                const parsed = JSON.parse(m.content);
+                if (parsed && Array.isArray(parsed.events)) {
+                  for (const ev of parsed.events) {
+                    if (ev && ev.id && ev.summary) candidateEvents.push(ev);
+                  }
+                  // Stop after the most recent events payload
+                  break;
+                }
+              } catch (_) {
+                // Not JSON from events tool; skip
+              }
+            }
+          }
+
+          const textForMatching = `${userMessage || ''} ${
+            assistantMessage || ''
+          }`
+            .toLowerCase()
+            .trim();
+
+          const extractKeywords = (text: string): string[] => {
+            const kws: string[] = [];
+            const quoted = text.match(/"([^"]+)"/g);
+            if (quoted) kws.push(...quoted.map((q) => q.slice(1, -1)));
+            // Heuristics: look for common tokens that appeared in recent queries/answers
+            if (text.includes('vlada')) kws.push('vlada');
+            if (text.includes('meeting')) kws.push('meeting');
+            if (text.includes('coffee')) kws.push('coffee');
+            if (text.includes('doctor')) kws.push('doctor');
+            return Array.from(new Set(kws.filter(Boolean)));
+          };
+
+          const keywords = extractKeywords(textForMatching);
+          if (candidateEvents.length > 0 && keywords.length > 0) {
+            const matches = candidateEvents.filter((ev) => {
+              const s = `${ev.summary || ''} ${
+                ev.description || ''
+              }`.toLowerCase();
+              return keywords.every((k) => s.includes(k));
+            });
+            let chosen =
+              matches[0] ||
+              candidateEvents.find((ev) => {
+                const s = `${ev.summary || ''}`.toLowerCase();
+                return keywords.some((k) => s.includes(k));
+              });
+            if (chosen && looksLikeGoogleEventId(chosen.id)) {
+              console.log(
+                '[Calendar Handler] Inferred missing/invalid eventId from recent events:',
+                chosen.summary,
+                chosen.id
+              );
+              args.eventId = chosen.id;
+              // Prefer the calendar email from the event if present (multi-account flows may add it)
+              if (chosen.calendarEmail && !args.calendarId) {
+                args.calendarId = chosen.calendarEmail;
+              }
+            }
+          }
+        } catch (inferErr) {
+          console.log(
+            '[Calendar Handler] Unable to infer eventId from context:',
+            inferErr
+          );
+        }
+      }
+
       onProgress?.({
         type: 'progress',
         content: `Deleting event "${args.eventId}"...`,
@@ -1161,8 +1414,8 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
   ) => {
     try {
       console.log('🔍 [getAvailability Handler] Starting with params:', {
-        timeMin: args.timeMin,
-        timeMax: args.timeMax,
+        timeMin: ensureRfc3339(args.timeMin),
+        timeMax: ensureRfc3339(args.timeMax),
         calendarIds: args.calendarIds,
         credsKeys: creds ? Object.keys(creds) : 'null',
       });
@@ -1174,8 +1427,8 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
 
       const result = await getAvailability(
         creds,
-        args.timeMin,
-        args.timeMax,
+        ensureRfc3339(args.timeMin)!,
+        ensureRfc3339(args.timeMax)!,
         args.calendarIds
       );
 
