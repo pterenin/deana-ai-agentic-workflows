@@ -354,11 +354,20 @@ app.post('/api/chat/stream', sseLimiter, async (req, res) => {
   } catch (error) {
     console.error('[Streaming Server] Error:', error);
 
-    // Send error message
+    // Send graceful error as a normal response instead of an error event
+    const friendly =
+      'Sorry, I ran into a temporary issue while processing your request. I could not complete one of the steps, but here’s what I can tell you now. Please try again in a moment.';
     res.write(
       `data: ${JSON.stringify({
-        type: 'error',
-        content: 'Sorry, I encountered an error processing your request.',
+        type: 'response',
+        content: friendly,
+        timestamp: new Date().toISOString(),
+      })}\n\n`
+    );
+    // Follow with a complete event so clients close normally
+    res.write(
+      `data: ${JSON.stringify({
+        type: 'complete',
         timestamp: new Date().toISOString(),
       })}\n\n`
     );
@@ -436,9 +445,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error('[Server] Error:', error);
-    res.status(500).json({
-      error: 'Internal server error',
+    res.json({
+      success: false,
+      message:
+        'Sorry, I ran into a temporary issue while processing your request. Please try again in a moment.',
       details: error instanceof Error ? error.message : 'Unknown error',
+      sessionId,
     });
   }
 });

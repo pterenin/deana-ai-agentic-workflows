@@ -32,32 +32,7 @@ export async function findContactEmailByName(
     creds?.access_token === 'valid' ? 'TEST' : 'REAL'
   );
 
-  // For test credentials, use mock data directly
-  if (creds?.access_token === 'valid') {
-    console.log(
-      '[findContactEmailByName] Using test credentials, returning mock contact data...'
-    );
-    const mockContacts: { [key: string]: string } = {
-      mike: 'pave1l.terenin@gmail.com',
-      bob: 'tps83127@gmail.com',
-      alice: 'alice@example.com',
-      john: 'john@example.com',
-      sarah: 'sarah@example.com',
-    };
-
-    const normalizedName = name.toLowerCase().trim();
-    const mockEmail = mockContacts[normalizedName];
-
-    if (mockEmail) {
-      console.log(
-        `[findContactEmailByName] Found mock contact: ${name} -> ${mockEmail}`
-      );
-      return mockEmail;
-    }
-
-    console.log(`[findContactEmailByName] No mock contact found for: ${name}`);
-    return null;
-  }
+  // No mock contacts support; always use real People API or return null
 
   const auth = makeOauthClient(creds);
   const people = google.people({ version: 'v1', auth });
@@ -89,29 +64,8 @@ export async function findContactEmailByName(
     }
 
     console.log(
-      `[findContactEmailByName] No contact found in ${connections.length} contacts, falling back to mock data...`
+      `[findContactEmailByName] No contact found in ${connections.length} contacts.`
     );
-
-    // Try mock contacts when no real contact is found
-    const mockContacts: { [key: string]: string } = {
-      mike: 'pavel1.terenin@gmail.com',
-      bob: 'tps18327@gmail.com',
-      alice: 'alice@example.com',
-      john: 'john@example.com',
-      sarah: 'sarah@example.com',
-    };
-
-    const normalizedName = name.toLowerCase().trim();
-    const mockEmail = mockContacts[normalizedName];
-
-    if (mockEmail) {
-      console.log(
-        `[findContactEmailByName] Found mock contact: ${name} -> ${mockEmail}`
-      );
-      return mockEmail;
-    }
-
-    console.log(`[findContactEmailByName] No mock contact found for: ${name}`);
     return null;
   } catch (error: any) {
     console.error('[findContactEmailByName] Error:', error);
@@ -141,29 +95,6 @@ export async function findContactEmailByName(
       );
     }
 
-    // Fallback to mock contact data when API fails
-    console.log(
-      '[findContactEmailByName] Falling back to mock contact data...'
-    );
-    const mockContacts: { [key: string]: string } = {
-      mike: 'pavel1.terenin@gmail.com',
-      bob: 'tps83271@gmail.com',
-      alice: 'alice@example.com',
-      john: 'john@example.com',
-      sarah: 'sarah@example.com',
-    };
-
-    const normalizedName = name.toLowerCase().trim();
-    const mockEmail = mockContacts[normalizedName];
-
-    if (mockEmail) {
-      console.log(
-        `[findContactEmailByName] Found mock contact: ${name} -> ${mockEmail}`
-      );
-      return mockEmail;
-    }
-
-    console.log(`[findContactEmailByName] No mock contact found for: ${name}`);
     return null;
   }
 }

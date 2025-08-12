@@ -805,22 +805,15 @@ export async function runMainAgent(
               role: 'tool' as const,
               content: JSON.stringify(result),
             });
-            // If the tool result is an error or needs user input, handle gracefully
+            // If the tool result is an error or needs user input, do not short-circuit.
+            // Surface a progress update and continue reasoning so the LLM can craft a friendly response.
             if (result && (result.error || result.needsUserInput)) {
-              // Non-fatal for web browsing tools: allow the agent to answer without live data
-              const nonFatalTools = new Set(['webSearch', 'webGet']);
-              if (!nonFatalTools.has(functionName)) {
-                return {
-                  content:
-                    result.message ||
-                    'There was an issue processing your request.',
-                  toolResults,
-                };
-              }
-              // For webSearch/webGet failures, continue reasoning without early return
               onProgress?.({
                 type: 'progress',
-                content: `Continuing without live web data due to a temporary issue.`,
+                content:
+                  typeof result.message === 'string' && result.message
+                    ? `Encountered a temporary issue: ${result.message}. Continuing...`
+                    : 'Encountered a temporary issue. Continuing...',
               });
             }
           } else {
