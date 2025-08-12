@@ -197,6 +197,8 @@ export async function createEvent(
     const response = await cal.events.insert({
       calendarId,
       requestBody: eventWithAttendees,
+      // Ensure invite emails are sent to attendees
+      sendUpdates: 'all',
     });
     console.log(
       '[createEvent] Google Calendar API response:',

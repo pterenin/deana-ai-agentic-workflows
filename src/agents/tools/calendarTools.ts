@@ -120,6 +120,15 @@ export const calendarTools: ChatCompletionTool[] = [
               description: 'Email address of attendee',
             },
           },
+          additionalEmails: {
+            type: 'array',
+            description:
+              'Additional email addresses to invite (comma-separated or list)',
+            items: {
+              type: 'string',
+              description: 'Email address to invite',
+            },
+          },
         },
         required: ['summary', 'start', 'end'],
       },

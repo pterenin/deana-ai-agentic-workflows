@@ -6,6 +6,7 @@ import {
   getAvailability,
 } from '../../activities/calendar';
 import { findContactEmailByName } from '../../activities/contacts';
+import { sendEmail } from './sendEmailHandler';
 
 import { AccountInfo, SessionContext } from '../types';
 
@@ -863,18 +864,95 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
         'DEBUG: args for createEvent in handler:',
         JSON.stringify(args, null, 2)
       );
+      // Merge attendees and additionalEmails into a unified attendee list
+      let attendeeEmails: string[] = [];
+      if (Array.isArray(args.attendees) && args.attendees.length > 0) {
+        attendeeEmails.push(
+          ...args.attendees
+            .map((a: any) => (typeof a === 'string' ? a : a.email))
+            .filter(Boolean)
+        );
+      }
+      if (
+        Array.isArray(args.additionalEmails) &&
+        args.additionalEmails.length > 0
+      ) {
+        attendeeEmails.push(...args.additionalEmails);
+      }
+      attendeeEmails = Array.from(new Set(attendeeEmails));
+
       const result = await createEvent(targetCreds, targetCalendarId, {
         start: args.start,
         end: args.end,
         summary: args.summary,
         timeZone: args.timeZone || 'America/Los_Angeles',
-        attendees: args.attendees, // Pass attendees if present
+        attendees: attendeeEmails.length > 0 ? attendeeEmails : undefined,
       });
 
       onProgress?.({
         type: 'progress',
         content: 'Event created successfully!',
       });
+
+      // Optionally send a follow-up email to explicitly provided additional emails
+      if (
+        Array.isArray(args.additionalEmails) &&
+        args.additionalEmails.length > 0
+      ) {
+        try {
+          const eventStart = new Date(args.start);
+          const eventEnd = new Date(args.end);
+          const timeZone = args.timeZone || 'America/Los_Angeles';
+          const locale: Intl.LocalesArgument = 'en-US';
+          const startText = eventStart.toLocaleString(locale, {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+            timeZone,
+          });
+          const endText = eventEnd.toLocaleString(locale, {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+            timeZone,
+          });
+          const dateText = eventStart.toLocaleDateString(locale, {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            timeZone,
+          });
+
+          for (const to of args.additionalEmails) {
+            onProgress?.({
+              type: 'progress',
+              content: `Sending invite email to ${to}...`,
+            });
+            await sendEmail(
+              {
+                to,
+                from:
+                  (targetAccount && targetAccount.email) || targetCalendarId,
+                subject: `Invitation: ${args.summary} on ${dateText}`,
+                body: `Hi,
+
+I'd like to invite you to "${args.summary}" on ${dateText} from ${startText} to ${endText}.
+
+I've added this to my calendar and you should receive a calendar invite as well. If the time doesn't work, let me know and we can adjust.
+
+Thanks!`,
+              },
+              targetCreds,
+              onProgress
+            );
+          }
+        } catch (e: any) {
+          console.error(
+            '[Calendar Handler] Failed to send follow-up email(s):',
+            e?.message || e
+          );
+        }
+      }
 
       return result;
     } catch (error: any) {
