@@ -306,11 +306,9 @@ const getEventsMultiAccount = async (
       }
     }
 
-    const targetAccount = determineTargetAccount(
-      userMessage,
-      context.accounts,
-      calendarIdToUse
-    );
+    const targetAccount = (context as any).forceBothCalendars
+      ? 'both'
+      : determineTargetAccount(userMessage, context.accounts, calendarIdToUse);
 
     console.log('🔍 [getEventsMultiAccount] User message:', userMessage);
     console.log(
@@ -450,6 +448,9 @@ const getEventsMultiAccount = async (
           content: `Detected ${conflicts.length} scheduling conflict(s) between calendars`,
         });
       }
+
+      // Persist conflicts for follow-up tools like proposeRescheduleOptions
+      (context as any).lastDetectedConflicts = conflicts;
 
       return {
         events: primaryEvents.concat(secondaryEvents),
@@ -893,6 +894,20 @@ Please let me know which alternative you'd prefer, or suggest a different time.`
         type: 'progress',
         content: 'Event created successfully!',
       });
+
+      // Persist last created event in session context for downstream tools (e.g., calls)
+      try {
+        if (context) {
+          (context as any).lastCreatedEvent = {
+            summary: args.summary,
+            start: args.start,
+            end: args.end,
+            timeZone: args.timeZone || 'America/Los_Angeles',
+            attendees: attendeeEmails,
+            calendarEmail: targetCalendarId,
+          };
+        }
+      } catch (_) {}
 
       // Optionally send a follow-up email to explicitly provided additional emails
       if (

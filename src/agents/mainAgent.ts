@@ -107,6 +107,63 @@ function getLastUserMessage(
   return undefined;
 }
 
+// Helper: detect simple affirmative confirmations (e.g., "yes", "ok")
+function isAffirmative(message: string | undefined): boolean {
+  if (!message) return false;
+  const m = message.trim().toLowerCase();
+  return /\b(yes|yeah|yep|sure|ok|okay|affirmative|please do|do it|go ahead|sounds good|that works|fine|alright|all right|correct)\b/.test(
+    m
+  );
+}
+
+// Helper: check if the assistant recently proposed rescheduling
+function assistantRecentlyProposedReschedule(
+  messages: Array<{ role: string; content?: string }>,
+  lookback: number = 5
+): boolean {
+  let seen = 0;
+  for (let i = messages.length - 1; i >= 0 && seen < lookback; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant') continue;
+    seen++;
+    const content = (msg.content || '').toLowerCase();
+    if (
+      /\b(reschedul|move|push|change\s+(the\s+)?time|shift)\b/.test(content) ||
+      /would you like me to reschedule/.test(content)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Helper: detect which alternative the user selected (1/2/3 or time like 4pm)
+function detectSelectedAlternativeIndex(
+  userMessage: string | undefined,
+  proposedOptions?: Array<{ startISO: string; endISO: string }>
+): number | null {
+  if (!userMessage) return null;
+  const m = userMessage.toLowerCase();
+  // Ordinal/number selection
+  if (/\b(first|1)\b/.test(m)) return 0;
+  if (/\b(second|2)\b/.test(m)) return 1;
+  if (/\b(third|3)\b/.test(m)) return 2;
+  // Time selection like 4pm, 4:00pm, 16:00
+  const timeMatch = m.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+  if (timeMatch && proposedOptions && proposedOptions.length) {
+    let hour = parseInt(timeMatch[1], 10);
+    const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+    const ampm = timeMatch[3] ? timeMatch[3].toLowerCase() : null;
+    if (ampm === 'pm' && hour < 12) hour += 12;
+    if (ampm === 'am' && hour === 12) hour = 0;
+    for (let i = 0; i < proposedOptions.length; i++) {
+      const d = new Date(proposedOptions[i].startISO);
+      if (d.getHours() === hour && d.getMinutes() === minute) return i;
+    }
+  }
+  return null;
+}
+
 // Helper function to find event to reschedule based on user request
 function findEventToReschedule(events: any[], userRequest: string): any | null {
   const requestLower = userRequest.toLowerCase();
@@ -544,6 +601,23 @@ export async function runMainAgent(
     } else {
       messages.push({ role: 'user', content: userMessage });
     }
+
+    // If the user already affirmed rescheduling after a proposal, nudge the model to proceed.
+    const lastUserMsgForNudge = getLastUserMessage(messages as any);
+    const rescheduleAffirmed =
+      isAffirmative(lastUserMsgForNudge) &&
+      assistantRecentlyProposedReschedule(messages as any);
+    if (rescheduleAffirmed) {
+      // Hint the model and set a context flag to ensure multi-calendar conflict data is available
+      if (context) {
+        (context as any).forceBothCalendars = true;
+      }
+      messages.push({
+        role: 'system',
+        content:
+          'USER CONFIRMED RESCHEDULING: Do not ask for reconfirmation. Immediately use proposeRescheduleOptions to generate 3 available slots for the conflicting secondary event. If event IDs are not available, first call getEvents across both calendars for the appropriate window (e.g., today/tomorrow) to obtain conflictDetails, then call proposeRescheduleOptions using the REAL eventId and calendarEmail of the secondary event. Present exactly 3 options. After the user selects one, call rescheduleEvent to move the event. Do not add timezone abbreviations in replies.',
+      });
+    }
     let loopCount = 0;
     let lastResponse = null;
     while (loopCount < 5) {
@@ -775,18 +849,88 @@ export async function runMainAgent(
             const supportsContext =
               contextSupportedFunctions.includes(functionName);
 
-            // Guardrails: only allow rescheduling tools if user expressed rescheduling intent
+            // Guardrails: allow rescheduling tools if user explicitly asked OR
+            // recently agreed to a reschedule proposal with an affirmative response
             const lastUserMsg = getLastUserMessage(messages as any);
             const isRescheduleTool =
               functionName === 'rescheduleEvent' ||
               functionName === 'proposeRescheduleOptions';
-            if (isRescheduleTool && !userWantsReschedule(lastUserMsg)) {
+            // Allow reschedule if user asked, affirmed, or picked an alternative
+            const selectedAltIndex = detectSelectedAlternativeIndex(
+              lastUserMsg,
+              (context as any)?.rescheduleContext?.proposedOptions
+            );
+            const allowReschedule =
+              userWantsReschedule(lastUserMsg) ||
+              isAffirmative(lastUserMsg) ||
+              selectedAltIndex !== null;
+            if (isRescheduleTool && !allowReschedule) {
               onProgress?.({
                 type: 'progress',
                 content:
                   'Skipping rescheduling actions since the user did not request rescheduling.',
               });
+              // IMPORTANT: Still return a tool message for this tool_call_id so the
+              // assistant message with tool_calls is always followed by tool responses.
+              toolResults.push({
+                tool_call_id: toolCall.id,
+                role: 'tool' as const,
+                content: JSON.stringify({
+                  skipped: true,
+                  reason:
+                    'Rescheduling action not executed because the user did not ask to reschedule.',
+                }),
+              });
               continue;
+            }
+
+            // Autofill missing arguments for proposeRescheduleOptions using last detected conflicts
+            if (
+              functionName === 'proposeRescheduleOptions' &&
+              context &&
+              (!functionArgs?.conflictingEventId ||
+                !functionArgs?.calendarEmail ||
+                !functionArgs?.originalStart ||
+                !functionArgs?.originalEnd)
+            ) {
+              const lastConflicts = (context as any).lastDetectedConflicts;
+              if (Array.isArray(lastConflicts) && lastConflicts.length > 0) {
+                // Prefer rescheduling the secondary (work) event by default
+                const conflict = lastConflicts[0];
+                const secondary = conflict?.secondaryEvent || {};
+                if (secondary?.id && secondary?.calendarEmail) {
+                  functionArgs.conflictingEventId =
+                    functionArgs.conflictingEventId || secondary.id;
+                  functionArgs.calendarEmail =
+                    functionArgs.calendarEmail || secondary.calendarEmail;
+                  functionArgs.eventSummary =
+                    functionArgs.eventSummary || secondary.summary;
+                  functionArgs.originalStart =
+                    functionArgs.originalStart || secondary.start;
+                  functionArgs.originalEnd =
+                    functionArgs.originalEnd || secondary.end;
+                }
+              }
+            }
+
+            // If the user selected an option, prefill rescheduleEvent args from context
+            if (functionName === 'rescheduleEvent' && context) {
+              const rc = (context as any).rescheduleContext;
+              if (rc && (!functionArgs?.newStart || !functionArgs?.newEnd)) {
+                const chosenIdx =
+                  selectedAltIndex !== null ? selectedAltIndex : 0; // default to first option if not specified
+                const option = rc.proposedOptions?.[chosenIdx];
+                if (option) {
+                  functionArgs.eventId =
+                    functionArgs.eventId || rc.eventId || rc.conflictingEventId;
+                  functionArgs.calendarEmail =
+                    functionArgs.calendarEmail || rc.calendarEmail;
+                  functionArgs.eventSummary =
+                    functionArgs.eventSummary || rc.eventSummary;
+                  functionArgs.newStart = option.startISO;
+                  functionArgs.newEnd = option.endISO;
+                }
+              }
             }
 
             const result = supportsContext

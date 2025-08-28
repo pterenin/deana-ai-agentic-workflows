@@ -56,7 +56,7 @@ export async function placeGeneralCallHandler(
   args: { task: string; phone?: string },
   _creds: any,
   onProgress?: (u: any) => void,
-  context?: { userName?: string; userPhone?: string }
+  context?: { userName?: string; userPhone?: string; lastCreatedEvent?: any }
 ) {
   // Prefer phone number explicitly provided in the user's message
   const extracted = extractPhoneFromText(args.task || '');
@@ -87,8 +87,37 @@ export async function placeGeneralCallHandler(
     };
   }
 
+  // Enrich task with event context if available so Vapi can answer questions
+  let enrichedTask = args.task || '';
+  const ev = context?.lastCreatedEvent;
+  if (ev && typeof ev === 'object') {
+    try {
+      const start = new Date(ev.start);
+      const end = new Date(ev.end);
+      const dateText = start.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      const startText = start.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+      const endText = end.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+      const summary = ev.summary || 'the meeting';
+      enrichedTask = `${args.task}. Context: This is regarding "${summary}" scheduled on ${dateText} from ${startText} to ${endText}.`;
+    } catch (_) {
+      // ignore enrichment errors
+    }
+  }
+
   return await runGeneralCall(
-    { task: args.task, phone: chosen },
+    { task: enrichedTask, phone: chosen },
     onProgress,
     context?.userName
   );
