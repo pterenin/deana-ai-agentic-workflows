@@ -8,7 +8,8 @@ import { SessionContext } from '../types';
 // Helper function to generate alternative time slots around an event
 function generateAlternativeSlots(
   originalStart: string,
-  originalEnd: string
+  originalEnd: string,
+  displayTimeZone?: string
 ): any[] {
   const startTime = new Date(originalStart);
   const endTime = new Date(originalEnd);
@@ -40,10 +41,12 @@ function generateAlternativeSlots(
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
+      timeZone: displayTimeZone,
     })} - ${alt.end.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
+      timeZone: displayTimeZone,
     })}`,
   }));
 }
@@ -86,10 +89,12 @@ export const conflictResolutionHandlers = {
         content: `Finding alternative times for "${args.eventSummary}"...`,
       });
 
-      // Generate 3 alternative time slots
+      // Generate 3 alternative time slots in the user's timezone (fallback to LA)
+      const userTz = context?.userTimeZone || 'America/Los_Angeles';
       const alternatives = generateAlternativeSlots(
         args.originalStart,
-        args.originalEnd
+        args.originalEnd,
+        userTz
       );
 
       // Check availability for each alternative across both calendars
