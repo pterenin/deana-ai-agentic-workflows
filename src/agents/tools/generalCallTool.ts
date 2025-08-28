@@ -101,15 +101,18 @@ Constraints:
 
   // Poll until ended
   let transcript = '';
+  let poll: any = { data: {} };
   while (status !== 'ended') {
     await new Promise((r) => setTimeout(r, 5000));
-    const poll = await axios.get(`https://api.vapi.ai/call/${callId}`, {
+    poll = await axios.get(`https://api.vapi.ai/call/${callId}`, {
       headers: { Authorization: 'Bearer 3981fd0c-e2f3-4200-a43d-107b6abf1680' },
     });
     status = poll.data.status;
     transcript = poll.data.transcript || transcript;
     onProgress?.({ type: 'progress', content: `Call status: ${status}` });
   }
+
+  console.log('[Vapi] Poll response:', poll.data);
 
   return { success: true, transcript };
 }

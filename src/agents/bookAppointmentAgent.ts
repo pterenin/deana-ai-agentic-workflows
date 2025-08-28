@@ -656,7 +656,7 @@ export async function bookAppointmentAgent(
         },
         {
           headers: {
-            Authorization: `Bearer ${vapiApiKey}`,
+            Authorization: `${vapiApiKey}`,
             'Content-Type': 'application/json',
           },
         }
