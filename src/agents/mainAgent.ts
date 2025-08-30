@@ -319,6 +319,56 @@ function formatTime(dateTimeString: string): string {
   });
 }
 
+// Helper: detect if recent tool results confirm success for certain tools
+function hasRecentToolSuccess(
+  messages: Array<{ role: string; content?: string }>,
+  toolNames: string[]
+): boolean {
+  const recent = messages.slice(-10);
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const msg = recent[i];
+    if (msg.role === 'tool' && typeof msg.content === 'string') {
+      try {
+        const parsed = JSON.parse(msg.content);
+        // Tool success patterns
+        if (
+          parsed &&
+          (parsed.success === true ||
+            parsed.rescheduledEvent ||
+            parsed.message?.toLowerCase?.().includes('successfully'))
+        ) {
+          return true;
+        }
+      } catch (_) {
+        // ignore
+      }
+    }
+  }
+  return false;
+}
+
+// Helper: naive detection of premature success claims without tool confirmation
+function looksLikeSuccessClaim(text: string | undefined): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  return (
+    /\b(moved|rescheduled|updated|changed)\b/.test(t) &&
+    /\b(\bto\b|success|done|completed)/.test(t)
+  );
+}
+
+// Helper: detect progress-style, non-final messages (avoid sending to user)
+function looksLikeProgressMessage(text: string | undefined): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  return (
+    /\bworking on( it)?\b/.test(t) ||
+    /\b(checking|verifying|confirming|finding|looking up)\b/.test(t) ||
+    /\b(i'll|i will) (confirm|let you know)\b/.test(t) ||
+    /\bhold on|one moment|just a sec(ond)?\b/.test(t)
+  );
+}
+
 // Helper function to extract participant names from user input
 function extractParticipantNames(userRequest: string): string[] {
   const names: string[] = [];
@@ -617,6 +667,48 @@ export async function runMainAgent(
         content:
           'USER CONFIRMED RESCHEDULING: Do not ask for reconfirmation. Immediately use proposeRescheduleOptions to generate 3 available slots for the conflicting secondary event. If event IDs are not available, first call getEvents across both calendars for the appropriate window (e.g., today/tomorrow) to obtain conflictDetails, then call proposeRescheduleOptions using the REAL eventId and calendarEmail of the secondary event. Present exactly 3 options. After the user selects one, call rescheduleEvent to move the event. Do not add timezone abbreviations in replies.',
       });
+    }
+
+    // === Planner step: generate a lightweight execution plan ===
+    try {
+      onProgress?.({ type: 'progress', content: 'Planning next steps...' });
+      const planPrompt = `You are an expert planner for a tool-using assistant. Create a concise execution plan to satisfy the latest user request using available tools. Return STRICT JSON with this schema:
+{
+  "steps": [
+    { "reason": string, "tool": string, "args": object }
+  ],
+  "successCriteria": [string]
+}
+Rules:
+- Use only known tool names from the tool list.
+- Args can be partial; handlers will resolve IDs.
+- Keep 1-3 steps max unless necessary.
+- Do not include markdown, comments, or extra text.
+Context (recent messages may include structured tool results): ${JSON.stringify(
+        messages.slice(-6)
+      )}`;
+      const planResp = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: planPrompt }],
+        temperature: 0.2,
+      });
+      const planContent = planResp.choices?.[0]?.message?.content || '{}';
+      const planJsonMatch = planContent.match(/\{[\s\S]*\}$/);
+      const planObj = planJsonMatch ? JSON.parse(planJsonMatch[0]) : {};
+      if (context) (context as any).lastPlan = planObj;
+      messages.push({
+        role: 'system',
+        content:
+          'EXECUTION PLAN: ' +
+          JSON.stringify(planObj) +
+          '\nFollow this plan step-by-step. Prefer using the planned tools in order. After executing the steps, REFLECT: verify success against successCriteria. If unmet, do one automatic correction or ask a single targeted question. Keep user-facing text concise and never include timezone abbreviations.',
+      });
+      onProgress?.({ type: 'progress', content: 'Plan created. Executing...' });
+    } catch (e) {
+      console.warn(
+        '[Planner] Skipping plan due to error:',
+        (e as any)?.message || e
+      );
     }
     let loopCount = 0;
     let lastResponse = null;
@@ -971,15 +1063,32 @@ export async function runMainAgent(
         messages.push(...toolResults);
         continue;
       }
-      // If the LLM response is a user-facing message (not a tool call), return it
+      // If the LLM response is a user-facing message (not a tool call), gate confirmations on recent tool success
       if (responseMessage.content) {
-        // Post-process to remove timezone abbreviations
-        const cleanedContent = removeTimezoneAbbreviations(
-          responseMessage.content
-        );
-        return {
-          content: cleanedContent,
-        };
+        let content = removeTimezoneAbbreviations(responseMessage.content);
+        const justClaimedSuccess = looksLikeSuccessClaim(content);
+        const hasToolSuccess = hasRecentToolSuccess(messages as any, [
+          'updateEvent',
+          'rescheduleEvent',
+          'createEvent',
+        ]);
+        console.log('DEBUG: justClaimedSuccess:', justClaimedSuccess);
+        console.log('DEBUG: hasToolSuccess:', hasToolSuccess);
+        // If progress-like or premature success without tool confirmation, do NOT send a user-facing message yet.
+        if (
+          !hasToolSuccess &&
+          (justClaimedSuccess || looksLikeProgressMessage(content))
+        ) {
+          onProgress?.({ type: 'progress', content });
+          // Nudge the model to complete the action via tools before speaking
+          messages.push({
+            role: 'system',
+            content:
+              'DO NOT send a user-facing message yet. Use the appropriate tool(s) to perform the requested change, and only after a successful tool result, provide a concise confirmation. If a tool fails, report the failure succinctly.',
+          });
+          continue;
+        }
+        return { content };
       }
       // If neither, break
       break;

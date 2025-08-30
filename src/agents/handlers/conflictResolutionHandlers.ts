@@ -255,6 +255,26 @@ Which option would you prefer, or would you like to suggest a different time?`,
         return new Date(trueUtcTs).toISOString();
       };
 
+      // Helper: build an ISO window in a TZ from relative day offsets
+      const buildWindowIso = (
+        base: Date,
+        timeZone: string,
+        daysBack: number,
+        daysForward: number
+      ): { min: string; max: string } => {
+        const baseLocal = new Date(base);
+        const startLocal = new Date(baseLocal);
+        startLocal.setDate(startLocal.getDate() - daysBack);
+        const endLocal = new Date(baseLocal);
+        endLocal.setDate(endLocal.getDate() + daysForward);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const toLocalYmd = (d: Date) =>
+          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        const min = toZonedIso(`${toLocalYmd(startLocal)}T00:00:00`, timeZone);
+        const max = toZonedIso(`${toLocalYmd(endLocal)}T23:59:59`, timeZone);
+        return { min, max };
+      };
+
       const resolveCalendarEmail = (
         input: string | undefined,
         ctx?: SessionContext
@@ -273,25 +293,6 @@ Which option would you prefer, or would you like to suggest a different time?`,
 
       console.log('🔧 [DEBUG rescheduleEvent] ==============================');
       console.log('🔧 [DEBUG] Input args:', JSON.stringify(args, null, 2));
-      console.log('🔧 [DEBUG] Default creds keys:', Object.keys(creds || {}));
-      console.log(
-        '🔧 [DEBUG] Context accounts:',
-        context?.accounts
-          ? {
-              primary: {
-                title: context.accounts.primary.title,
-                email: context.accounts.primary.email,
-              },
-              secondary: context.accounts.secondary
-                ? {
-                    title: context.accounts.secondary.title,
-                    email: context.accounts.secondary.email,
-                  }
-                : null,
-            }
-          : 'No accounts'
-      );
-      console.log('🔧 [DEBUG rescheduleEvent] ==============================');
 
       onProgress?.({
         type: 'progress',
@@ -419,86 +420,124 @@ Which option would you prefer, or would you like to suggest a different time?`,
       let resolvedEventId = args.eventId;
       if (resolvedCalendarEmail && targetCreds) {
         try {
-          // Build day range based on the ORIGINAL event time when available
-          const referenceISO =
-            (context as any)?.rescheduleContext?.originalStart ||
-            normalizedStart;
-          const parts = new Date(referenceISO);
-          const y = parts.getUTCFullYear();
-          const m = parts.getUTCMonth() + 1;
-          const d = parts.getUTCDate();
-          const pad = (n: number) => String(n).padStart(2, '0');
-          const dayStartLocal = `${y}-${pad(m)}-${pad(d)}T00:00:00`;
-          const dayEndLocal = `${y}-${pad(m)}-${pad(d)}T23:59:59`;
-          const timeMinISO = toZonedIso(dayStartLocal, userTz);
-          const timeMaxISO = toZonedIso(dayEndLocal, userTz);
+          // Build search windows. Prefer ORIGINAL event day; otherwise widen around now.
+          const originalStartISO = (context as any)?.rescheduleContext
+            ?.originalStart;
+          const now = new Date();
+          const windows: Array<{ min: string; max: string; label: string }> =
+            [];
+
+          if (originalStartISO) {
+            const ref = new Date(originalStartISO);
+            const y = ref.getUTCFullYear();
+            const mo = ref.getUTCMonth() + 1;
+            const da = ref.getUTCDate();
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const dayStartLocal = `${y}-${pad(mo)}-${pad(da)}T00:00:00`;
+            const dayEndLocal = `${y}-${pad(mo)}-${pad(da)}T23:59:59`;
+            windows.push({
+              min: toZonedIso(dayStartLocal, userTz),
+              max: toZonedIso(dayEndLocal, userTz),
+              label: 'original-day',
+            });
+          }
+
+          // Always include a relative window around now to catch direct reschedules without original context
+          const wk = buildWindowIso(now, userTz, 7, 7);
+          windows.push({ ...wk, label: '±7d-now' });
 
           onProgress?.({
             type: 'progress',
             content: 'Locating the exact event to reschedule...',
           });
 
-          let dayEvents: any[] = [];
-          try {
-            dayEvents = await getEvents(
-              targetCreds,
-              resolvedCalendarEmail,
-              timeMinISO,
-              timeMaxISO
-            );
-          } catch (e) {
-            // If the chosen calendar fails, try primary as a fallback
-            if (
-              context?.accounts?.primary?.email &&
-              resolvedCalendarEmail !== context.accounts.primary.email
-            ) {
-              console.warn(
-                '⚠️ [DEBUG] Retry event search with PRIMARY calendar'
-              );
-              dayEvents = await getEvents(
-                context.accounts.primary.creds,
-                context.accounts.primary.email,
-                timeMinISO,
-                timeMaxISO
-              );
-              resolvedCalendarEmail = context.accounts.primary.email;
-              targetCreds = context.accounts.primary.creds;
-            } else {
-              throw e;
-            }
-          }
-
           const requestedLower = (args.eventSummary || '').toLowerCase();
+          const tokens: string[] = Array.from(
+            new Set(
+              requestedLower
+                .split(/[^a-z0-9]+/g)
+                .filter((t: string) => t && t.length > 2)
+            )
+          );
 
-          // If the provided eventId doesn't exist in this day's events, force resolution
-          const idExists = dayEvents.some((e: any) => e.id === args.eventId);
-
-          let best: any = null;
-          let bestDelta = Number.POSITIVE_INFINITY;
-          const targetTs = new Date(referenceISO).getTime();
-          for (const e of dayEvents) {
-            const sumLower = (e.summary || '').toLowerCase();
-            if (requestedLower && !sumLower.includes(requestedLower)) continue;
-            const eventStart = e.start?.dateTime
-              ? new Date(e.start.dateTime).getTime()
+          const score = (sumLower: string, eventStartIso: string): number => {
+            const tokenHits: number = tokens.reduce(
+              (acc: number, t: string) => acc + (sumLower.includes(t) ? 1 : 0),
+              0
+            );
+            const startTs = eventStartIso
+              ? new Date(eventStartIso).getTime()
               : 0;
-            const delta = Math.abs(eventStart - targetTs);
-            if (delta < bestDelta) {
+            const proximity = Math.abs(startTs - now.getTime());
+            // Higher token hits, lower proximity is better
+            return tokenHits * 1000000000 - proximity;
+          };
+
+          let candidates: any[] = [];
+
+          for (const w of windows) {
+            let eventsWin: any[] = [];
+            try {
+              eventsWin = await getEvents(
+                targetCreds,
+                resolvedCalendarEmail,
+                w.min,
+                w.max
+              );
+            } catch (e) {
+              // If chosen calendar fails, try primary as fallback
+              if (
+                context?.accounts?.primary?.email &&
+                resolvedCalendarEmail !== context.accounts.primary.email
+              ) {
+                console.warn(
+                  '⚠️ [DEBUG] Retry event search with PRIMARY calendar'
+                );
+                eventsWin = await getEvents(
+                  context.accounts.primary.creds,
+                  context.accounts.primary.email,
+                  w.min,
+                  w.max
+                );
+                resolvedCalendarEmail = context.accounts.primary.email;
+                targetCreds = context.accounts.primary.creds;
+              } else {
+                throw e;
+              }
+            }
+            candidates.push(...eventsWin);
+            // Early stop if too many
+            if (candidates.length > 200) break;
+          }
+
+          // Evaluate candidates
+          let best: any = null;
+          let bestScore = -Infinity;
+          for (const e of candidates) {
+            const sumLower = (e.summary || '').toLowerCase();
+            const startIso = e.start?.dateTime || e.start?.date || '';
+            const s = score(sumLower, startIso);
+            if (s > bestScore) {
+              bestScore = s;
               best = e;
-              bestDelta = delta;
             }
           }
 
+          const idExists = candidates.some((e: any) => e.id === args.eventId);
           if (!idExists && best?.id) {
             resolvedEventId = best.id;
             console.log(
-              '🔧 [DEBUG] Resolved eventId by search:',
+              '🔧 [DEBUG] Resolved eventId by widened search:',
               resolvedEventId,
               'summary:',
-              best.summary
+              best.summary,
+              'start:',
+              best.start?.dateTime || best.start?.date
             );
           } else if (!idExists) {
-            console.warn('⚠️ [DEBUG] Could not resolve eventId by search');
+            console.warn(
+              '⚠️ [DEBUG] Could not resolve eventId by widened search'
+            );
           }
         } catch (searchErr) {
           console.error(
@@ -506,6 +545,16 @@ Which option would you prefer, or would you like to suggest a different time?`,
             searchErr
           );
         }
+      }
+
+      // If we still have no usable eventId, surface a clear message requiring user input
+      if (!resolvedEventId || /^(test|dummy)$/i.test(resolvedEventId)) {
+        return {
+          error: true,
+          needsUserInput: true,
+          message:
+            "I couldn't locate the exact event to move. Please confirm the event title and which calendar it’s in (Personal or Work), or say 'list my events' for today so I can match it.",
+        };
       }
 
       console.log('🔧 [DEBUG] Final rescheduling parameters:');
@@ -534,6 +583,19 @@ Which option would you prefer, or would you like to suggest a different time?`,
         type: 'progress',
         content: 'Event successfully rescheduled!',
       });
+
+      // Persist last modified event for follow-up edits like duration changes
+      try {
+        if (context) {
+          (context as any).lastModifiedEvent = {
+            id: resolvedEventId,
+            calendarEmail: resolvedCalendarEmail || args.calendarEmail,
+            summary: args.eventSummary,
+            newStart: normalizedStart,
+            newEnd: normalizedEnd,
+          };
+        }
+      } catch (_) {}
 
       return {
         success: true,

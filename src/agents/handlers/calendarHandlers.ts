@@ -662,7 +662,6 @@ export const calendarHandlers = {
         calendarId: args.calendarId,
         timeMin: args.timeMin,
         timeMax: args.timeMax,
-        credsKeys: creds ? Object.keys(creds) : 'null',
       });
 
       onProgress?.({
@@ -1113,16 +1112,137 @@ Thanks!`,
         content: `Updating event "${args.eventId}"...`,
       });
 
-      const result = await updateEvent(
+      // Prefer the last successfully modified event (from a prior reschedule/update)
+      // to avoid the model passing stale/wrong IDs or calendars.
+      let eventIdToUse = args.eventId;
+      let usedLastModifiedContext = false;
+      try {
+        const lastMod = (context as any)?.lastModifiedEvent;
+        if (lastMod?.id && lastMod?.calendarEmail) {
+          usedLastModifiedContext = true;
+          eventIdToUse = lastMod.id;
+          targetCalendarId = lastMod.calendarEmail;
+          if (context?.accounts) {
+            if (lastMod.calendarEmail === context.accounts.primary.email) {
+              targetCreds = context.accounts.primary.creds;
+            } else if (
+              context.accounts.secondary &&
+              lastMod.calendarEmail === context.accounts.secondary.email
+            ) {
+              targetCreds = context.accounts.secondary.creds;
+            }
+          }
+          console.log('[updateEvent] Overriding from lastModifiedEvent:', {
+            id: eventIdToUse,
+            calendarEmail: targetCalendarId,
+          });
+        }
+      } catch (_) {}
+
+      // If eventId seems invalid or not found, try resolving from recent context
+      const looksLikeGoogleEventId = (id: string | undefined): boolean => {
+        if (!id) return false;
+        if (/^\d+$/.test(id)) return false;
+        if (id.length < 8) return false;
+        if (/\s/.test(id)) return false;
+        if (/[A-Z]/.test(id)) return false;
+        return /^[a-z0-9_-]+$/.test(id);
+      };
+      if (
+        !usedLastModifiedContext &&
+        !looksLikeGoogleEventId(eventIdToUse) &&
+        context
+      ) {
+        const recent =
+          (context as any).lastModifiedEvent ||
+          (context as any).rescheduleContext;
+        if (recent && looksLikeGoogleEventId(recent.id)) {
+          eventIdToUse = recent.id;
+          if (!args.calendarId && recent.calendarEmail) {
+            targetCalendarId = recent.calendarEmail;
+          }
+        }
+      }
+
+      console.log('[updateEvent] Final target before API call:', {
+        calendarId: targetCalendarId,
+        eventId: eventIdToUse,
+        usedLastModifiedContext,
+      });
+
+      let result = await updateEvent(
         targetCreds,
         targetCalendarId,
-        args.eventId,
+        eventIdToUse,
         {
           start: args.start,
           end: args.end,
           summary: args.summary,
         }
       );
+
+      // If 404, attempt one fallback resolution by searching same-day events and matching by summary/time proximity
+      if (
+        (result as any)?.status === 404 ||
+        (result as any)?.data?.error?.code === 404
+      ) {
+        try {
+          onProgress?.({
+            type: 'progress',
+            content:
+              'Event not found by ID. Trying to locate it by title and time...',
+          });
+          const userTz =
+            (context as any)?.userTimeZone || 'America/Los_Angeles';
+          const toIso = (dt: string) => (dt ? dt : new Date().toISOString());
+          const refIso = toIso(
+            args.start || args.end || new Date().toISOString()
+          );
+          const ref = new Date(refIso);
+          const pad = (n: number) => String(n).padStart(2, '0');
+          const dayStartLocal = `${ref.getFullYear()}-${pad(
+            ref.getMonth() + 1
+          )}-${pad(ref.getDate())}T00:00:00`;
+          const dayEndLocal = `${ref.getFullYear()}-${pad(
+            ref.getMonth() + 1
+          )}-${pad(ref.getDate())}T23:59:59`;
+          const toZIso = (s: string) => new Date(s).toISOString();
+          const timeMinISO = toZIso(dayStartLocal);
+          const timeMaxISO = toZIso(dayEndLocal);
+          const events = await getEvents(
+            targetCreds,
+            targetCalendarId,
+            timeMinISO,
+            timeMaxISO
+          );
+          let best: any = null;
+          let bestDelta = Number.POSITIVE_INFINITY;
+          const targetTs = args.start
+            ? new Date(args.start).getTime()
+            : args.end
+            ? new Date(args.end).getTime()
+            : ref.getTime();
+          const requestedLower = (args.summary || '').toLowerCase();
+          for (const e of events) {
+            const sumLower = (e.summary || '').toLowerCase();
+            if (requestedLower && !sumLower.includes(requestedLower)) continue;
+            const startIso = e.start?.dateTime || e.start?.date || '';
+            const sTs = startIso ? new Date(startIso).getTime() : 0;
+            const delta = Math.abs(sTs - targetTs);
+            if (delta < bestDelta) {
+              bestDelta = delta;
+              best = e;
+            }
+          }
+          if (best?.id) {
+            result = await updateEvent(targetCreds, targetCalendarId, best.id, {
+              start: args.start,
+              end: args.end,
+              summary: args.summary,
+            });
+          }
+        } catch (_) {}
+      }
 
       onProgress?.({
         type: 'progress',

@@ -277,29 +277,12 @@ app.post('/api/chat/stream', sseLimiter, async (req, res) => {
     context.clientNowISO = clientNowISO;
     // Avoid logging PII and secrets
     console.log('[Streaming Server] Received stream request');
-    console.log(
-      '[Streaming Server] Session userPhone set to:',
-      context.userPhone
-    );
     context.sessionId = sessionId;
 
     conversationContexts.set(sessionId, context);
 
     // Add current message to context
     context.history.push({ role: 'user', content: message });
-
-    console.log(
-      `[Streaming Server] Processing message for session ${sessionId}`
-    );
-    console.log(
-      `[Streaming Server] Accounts: Primary (${primary_account.title}: ${
-        primary_account.email
-      })${
-        secondary_account
-          ? `, Secondary (${secondary_account.title}: ${secondary_account.email})`
-          : ''
-      }`
-    );
 
     // Send initial "thinking" message
     res.write(
@@ -313,7 +296,6 @@ app.post('/api/chat/stream', sseLimiter, async (req, res) => {
     // Run the enhanced agent with progress updates
     const result = await runEnhancedMainAgent(message, context, (update) => {
       // Send progress update to client
-      console.log('🔍 [Streaming Server] Progress update:', update);
       res.write(
         `data: ${JSON.stringify({
           type: update.type,
