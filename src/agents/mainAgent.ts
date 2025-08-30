@@ -369,6 +369,14 @@ function looksLikeProgressMessage(text: string | undefined): boolean {
   );
 }
 
+// Helper: detect a simple greeting like "Hello Deana" as a first-message trigger
+function isInitialMessage(message: string | undefined): boolean {
+  if (!message) return false;
+  const m = message.trim().toLowerCase();
+  // Accept short greetings that optionally mention the assistant name
+  return m === 'initial message';
+}
+
 // Helper function to extract participant names from user input
 function extractParticipantNames(userRequest: string): string[] {
   const names: string[] = [];
@@ -402,6 +410,22 @@ export async function runMainAgent(
   context?: any,
   onProgress?: (update: { type: string; content: string; data?: any }) => void
 ): Promise<any> {
+  // Transform a plain greeting into a structured "today overview" request
+  if (isInitialMessage(userMessage)) {
+    // Nudge multi-calendar behavior
+    if (context) {
+      (context as any).forceBothCalendars = true;
+    }
+    // Seed a concrete instruction that leads the LLM to fetch today\'s events from NOW,
+    // detect conflicts, and craft a friendly greeting + sign-off.
+    userMessage = `How does my day look today?
+      Please check both calendars starting from now, list ongoing and upcoming events only, detect any conflicts and ask if you should help reschedule. If no conflicts are found, don't say anything about conflicts.
+      Greet me by my first name, depending on the time of day ask how
+      my morning, day or evening going or say that you hope my morning,
+      day or evening is going well and end with
+      a friendly wish and ask if I need help with anything.
+      Be freindly and cheerful.`;
+  }
   // Booking intent detection (simple)
   const bookingIntent =
     /book.*(appointment|hair|barber|cut|massage|nail|doctor|dentist)/i.test(
